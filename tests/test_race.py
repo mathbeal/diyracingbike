@@ -66,39 +66,46 @@ def _c(id, team, pos, energy=5, potion_used=False):
     return Cyclist(id=id, team=team, pos=pos, energy=energy, potion_used=potion_used)
 
 def test_resolve_advance_moves_forward():
+    # vitesse = énergie (défaut 5) → avance de 5 cases
     state = _make_state(_c("A1","A",5))
     new = resolve(state, {"A1": "advance"})
-    assert new.cyclists[0].pos == 6
+    assert new.cyclists[0].pos == 10
 
 def test_resolve_wait_does_not_move():
     state = _make_state(_c("A1","A",5))
     new = resolve(state, {"A1": "wait"})
     assert new.cyclists[0].pos == 5
 
-def test_resolve_no_superposition():
-    # Deux cyclistes veulent avancer vers la même case
-    state = _make_state(_c("A1","A",5), _c("B1","B",4))
+def test_resolve_superposition_allowed():
+    # Deux cyclistes peuvent partager la même case (dépassement permis)
+    # A1(pos=5,energy=5) avance → 10 ; B1(pos=5,energy=5) avance → 10
+    state = _make_state(_c("A1","A",5), _c("B1","B",5))
     new = resolve(state, {"A1": "advance", "B1": "advance"})
     positions = [c.pos for c in new.cyclists]
-    assert len(set(positions)) == 2  # pas de superposition
+    assert positions[0] == positions[1] == 10  # les deux sur la même case
 
 def test_resolve_energy_decreases_at_front():
+    # en tête, avance : coût = énergie//2 = 5//2 = 2 → énergie 5-2 = 3
     state = _make_state(_c("A1","A",10, energy=5))
     new = resolve(state, {"A1": "advance"})
-    assert new.cyclists[0].energy == 4  # en tête → -1
+    assert new.cyclists[0].energy == 3
 
 def test_resolve_energy_increases_drafting():
-    # A1 en tête, B1 juste derrière
-    state = _make_state(_c("A1","A",10), _c("B1","B",9, energy=3))
+    # B1 épuisé (énergie 1) suit A1 (énergie 5) : vitesse=1, coût 0, bonus roue +1
+    # A1 pos=10→15 (vitesse 5), B1 pos=9→10 (vitesse 1) ; gap=5 ≤ 5 → en roue
+    # B1 energy_delta = -(1//2) + 1 = 0 + 1 = +1 → énergie 1→2
+    state = _make_state(_c("A1","A",10), _c("B1","B",9, energy=1))
     new = resolve(state, {"A1": "advance", "B1": "advance"})
     b1 = next(c for c in new.cyclists if c.id == "B1")
-    assert b1.energy == 4  # en roue → +1
+    assert b1.energy == 2  # cycliste épuisé récupère en suivant un leader rapide
 
 def test_resolve_energy_clamped_at_5():
-    state = _make_state(_c("A1","A",10), _c("B1","B",9, energy=5))
+    # A1 (énergie 2) avance → pos 10→12. B1 (énergie 5) draft → pos 9.
+    # Gap = 3 ≤ 5 → B1 en roue. energy_delta = +1. Clamp à 5.
+    state = _make_state(_c("A1","A",10, energy=2), _c("B1","B",9, energy=5))
     new = resolve(state, {"A1": "advance", "B1": "draft"})
     b1 = next(c for c in new.cyclists if c.id == "B1")
-    assert b1.energy == 5  # pas dépassé 5
+    assert b1.energy == 5  # clampé à 5, pas dépassé
 
 def test_resolve_energy_min_1():
     state = _make_state(_c("A1","A",10, energy=1))
@@ -106,17 +113,19 @@ def test_resolve_energy_min_1():
     assert new.cyclists[0].energy == 1  # jamais en dessous de 1
 
 def test_resolve_potion_adds_energy():
+    # énergie 2, potion, en tête : coût=-(2//2)=-1, potion=+3 → delta=+2 → énergie=4
     state = _make_state(_c("A1","A",10, energy=2, potion_used=False))
     new = resolve(state, {"A1": "potion"})
     a1 = new.cyclists[0]
     assert a1.potion_used is True
-    assert a1.energy == 4  # 2 -1(front) +3(potion) = 4
+    assert a1.energy == 4  # 2 -1(coût) +3(potion) = 4
 
 def test_resolve_potion_already_used_no_effect():
+    # énergie 3, potion déjà utilisée, en tête : coût=-(3//2)=-1 → énergie=2
     state = _make_state(_c("A1","A",10, energy=3, potion_used=True))
     new = resolve(state, {"A1": "potion"})
     a1 = new.cyclists[0]
-    assert a1.energy == 2  # potion ignorée → -1 front seulement
+    assert a1.energy == 2  # potion ignorée → coût vitesse seulement
 
 def test_resolve_adds_to_finished():
     state = _make_state(_c("A1","A",19, energy=5))

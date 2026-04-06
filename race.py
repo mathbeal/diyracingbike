@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 from dotenv import load_dotenv
 import anthropic
 
@@ -73,8 +74,12 @@ Derrière toi (≤5 cases): {behind_str or "personne"}
 Coéquipiers: {team_str}
 Potion: {potion_status}
 
+Mécanique de vitesse : ta vitesse = ton énergie (ex: énergie 5 → avance de 5 cases).
+Coût énergétique si tu avances : -(énergie÷2 arrondi vers le bas), ex: énergie 5 → -2.
+En roue (≤5 cases derrière un leader) : bonus +1 énergie, même en avançant.
+
 Stratégie: économise ton énergie en te mettant en roue (draft) quand possible.
-Si tu es en tête et épuisé, ralentis (slow) pour laisser un coéquipier passer.
+Si tu es en tête et épuisé (énergie 1-2), ralentis (slow) pour récupérer.
 Utilise la potion au bon moment (sprint final ou pour remonter).
 
 Réponds UNIQUEMENT par un seul mot parmi: advance | slow | draft | potion | wait"""
@@ -156,45 +161,33 @@ async def orchestrator(state: RaceState) -> dict[str, Action]:
 # MOTEUR
 # =============================================================================
 
-_ACTION_STEP: dict[Action, int] = {
-    "advance": 1,
-    "slow":    0,
-    "draft":   0,
-    "potion":  1,
-    "wait":    0,
-}
-
-
 def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
     """
     Moteur synchrone et déterministe.
-    1. Calcule les positions souhaitées
+    1. Calcule les positions souhaitées (vitesse = énergie pour advance/potion)
     2. Résout les collisions (le cycliste le plus avancé a priorité)
-    3. Met à jour l'énergie selon les règles de draft
+    3. Met à jour l'énergie : coût proportionnel à la vitesse, récupération en roue
     4. Détecte les arrivées
     Retourne un NOUVEL état — ne mute jamais l'état existant.
     """
-    # 1. Positions souhaitées
+    # 1. Positions souhaitées — vitesse = énergie quand on avance
     desired: dict[str, int] = {}
     for c in state.cyclists:
         if c.id in state.finished:
             desired[c.id] = c.pos
             continue
         action = actions.get(c.id, "advance")
-        desired[c.id] = c.pos + _ACTION_STEP[action]
+        step = c.energy if action in ("advance", "potion", "draft") else 0
+        if step > 0:
+            step = max(1, step + random.randint(-1, 1))
+        desired[c.id] = c.pos + step
 
-    # 2. Résolution des collisions
-    # Tri par position décroissante : le plus avancé a priorité
+    # 2. Positions finales — plusieurs cyclistes peuvent partager une case (dépassement permis)
     sorted_cyclists = sorted(state.cyclists, key=lambda c: c.pos, reverse=True)
-    occupied: set[int] = set()
     final_pos: dict[str, int] = {}
 
     for c in sorted_cyclists:
-        p = desired[c.id]
-        while p in occupied:
-            p -= 1
-        occupied.add(p)
-        final_pos[c.id] = max(p, 0)
+        final_pos[c.id] = max(desired[c.id], 0)
 
     # 3. Mise à jour énergie
     new_cyclists: list[Cyclist] = []
@@ -205,14 +198,21 @@ def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
 
         pos = final_pos[c.id]
         action = actions.get(c.id, "advance")
+        advancing = action in ("advance", "potion")
 
-        # Quelqu'un à ≤2 cases devant ?
+        # Quelqu'un à ≤5 cases devant ? (fenêtre élargie car vitesses plus élevées)
         anyone_ahead = any(
-            final_pos[o.id] > pos and final_pos[o.id] <= pos + 2
+            final_pos[o.id] > pos and final_pos[o.id] <= pos + 5
             for o in state.cyclists if o.id != c.id
         )
 
-        energy_delta = 1 if anyone_ahead else -1
+        if advancing:
+            # Coût proportionnel à la vitesse (= énergie actuelle)
+            # En roue : bonus +1 qui réduit le coût (cycliste épuisé peut récupérer)
+            energy_delta = -(c.energy // 2) + (1 if anyone_ahead else 0)
+        else:
+            # Récupération : +1 en roue, -1 en tête
+            energy_delta = 1 if anyone_ahead else -1
 
         # Potion
         if action == "potion" and not c.potion_used:
@@ -269,29 +269,41 @@ def render(state: RaceState) -> str:
     seg_len = state.track_length // 3
     width = seg_len  # nombre de colonnes par segment
 
-    # Grille : 3 segments × width colonnes, chaque cellule = (cyclist_id | None)
-    grid: list[list[str | None]] = [[None] * width for _ in range(3)]
-    energy_grid: list[list[str | None]] = [[None] * width for _ in range(3)]
-
+    # Grille : 3 segments × width colonnes, chaque cellule = liste de cyclistes
+    cell_map: dict[tuple[int, int], list[Cyclist]] = {}
     for c in state.cyclists:
         if c.pos >= state.track_length:
             continue
-        row, col = pos_to_xy(c.pos, state.track_length)
-        color = TEAM_COLORS.get(c.team, "")
-        grid[row][col] = f"{color}{c.id}{RESET}"
-        energy_grid[row][col] = f"{color}{ENERGY_CHARS[c.energy]}{RESET}"
+        key = pos_to_xy(c.pos, state.track_length)
+        cell_map.setdefault(key, []).append(c)
 
-    def render_row(row_idx: int) -> list[str]:
-        """Retourne les deux lignes (cyclistes + énergie) d'un segment."""
-        cells = grid[row_idx]
-        ecells = energy_grid[row_idx]
-        cyclist_line = " ".join(c if c else " · " for c in cells)
-        energy_line  = " ".join(e if e else "   " for e in ecells)
-        return [cyclist_line, energy_line]
+    # Nombre max de cyclistes dans une même case (au moins 1 pour la mise en page)
+    max_occ = max((len(v) for v in cell_map.values()), default=1)
+
+    def cyclist_cell(row_idx: int, col: int, layer: int) -> str:
+        cyclists_here = cell_map.get((row_idx, col), [])
+        if layer < len(cyclists_here):
+            c = cyclists_here[layer]
+            color = TEAM_COLORS.get(c.team, "")
+            return f"{color}{c.id}{RESET}"
+        return " · " if layer == 0 and not cyclists_here else "   "
+
+    def energy_cell(row_idx: int, col: int) -> str:
+        cyclists_here = cell_map.get((row_idx, col), [])
+        if cyclists_here:
+            c = cyclists_here[0]
+            color = TEAM_COLORS.get(c.team, "")
+            return f"{color}{ENERGY_CHARS[c.energy]}{RESET}"
+        return "   "
+
+    def render_cyclist_row(row_idx: int, layer: int) -> str:
+        return " ".join(cyclist_cell(row_idx, col, layer) for col in range(width))
+
+    def render_energy_row(row_idx: int) -> str:
+        return " ".join(energy_cell(row_idx, col) for col in range(width))
 
     sep = "═" * (width * 4)
     corner_r = "┓"
-    corner_l = "┗"
 
     lines = []
     lines.append(f"{'─'*60}")
@@ -299,25 +311,28 @@ def render(state: RaceState) -> str:
     lines.append(f"{'─'*60}")
 
     # Segment 0 (haut, gauche→droite)
-    s0_cyclists, s0_energy = render_row(0)
     lines.append(f"[S]━╔{sep}╗━━━{corner_r}")
-    lines.append(f"   ║ {s0_cyclists} ║   ┃")
-    lines.append(f"   ║ {s0_energy} ║   ┃")
+    for layer in range(max_occ):
+        lines.append(f"   ║ {render_cyclist_row(0, layer)} ║   ┃")
+    lines.append(f"   ║ {render_energy_row(0)} ║   ┃")
     lines.append(f"   ╚{sep}╝   ┃")
 
     # Segment 1 (milieu, droite→gauche)
-    s1_cyclists, s1_energy = render_row(1)
     lines.append(f"   ╔{sep}╗   ┃")
-    lines.append(f"   ║ {s1_cyclists} ║━━━┛")
-    lines.append(f"   ║ {s1_energy} ║")
+    for layer in range(max_occ):
+        connector = "━━━┛" if layer == 0 else "   ┃"
+        lines.append(f"   ║ {render_cyclist_row(1, layer)} ║{connector}")
+    lines.append(f"   ║ {render_energy_row(1)} ║")
     lines.append(f"┏━━╚{sep}╝")
     lines.append(f"┃")
 
     # Segment 2 (bas, gauche→droite)
-    s2_cyclists, s2_energy = render_row(2)
     lines.append(f"┃  ╔{sep}╗")
-    lines.append(f"┗━━║ {s2_cyclists} ║━━━[F]")
-    lines.append(f"   ║ {s2_energy} ║")
+    for layer in range(max_occ):
+        prefix = "┗━━" if layer == 0 else "   "
+        connector = "━━━[F]" if layer == 0 else "      "
+        lines.append(f"{prefix}║ {render_cyclist_row(2, layer)} ║{connector}")
+    lines.append(f"   ║ {render_energy_row(2)} ║")
     lines.append(f"   ╚{sep}╝")
 
     # Tableau de scores
@@ -380,19 +395,23 @@ def load_config(path: str) -> dict:
 
 
 def init_race_from_config(config: dict) -> RaceState:
-    """Crée l'état initial à partir d'une config JSON validée."""
-    cyclists = []
-    pos = 0
+    """Crée l'état initial à partir d'une config JSON validée.
+    Les positions de départ sont mélangées aléatoirement."""
+    all_riders: list[tuple[str, dict]] = []
     for team_data in config["teams"]:
         for rider in team_data["riders"]:
-            cyclists.append(Cyclist(
-                id=rider["id"],
-                team=team_data["name"],
-                pos=pos,
-                energy=rider["energy"],
-                potion_used=False,
-            ))
-            pos += 1
+            all_riders.append((team_data["name"], rider))
+    random.shuffle(all_riders)
+
+    cyclists = []
+    for pos, (team_name, rider) in enumerate(all_riders):
+        cyclists.append(Cyclist(
+            id=rider["id"],
+            team=team_name,
+            pos=pos,
+            energy=rider["energy"],
+            potion_used=False,
+        ))
     cyclists.sort(key=lambda c: c.pos, reverse=True)
     return RaceState(
         track_length=config["track_length"],
@@ -403,20 +422,17 @@ def init_race_from_config(config: dict) -> RaceState:
 
 
 def init_race(track_length: int, teams: list[str], riders_per_team: int) -> RaceState:
-    """Crée l'état initial. Cyclistes placés aux positions 0..N-1 (échelonnés)."""
-    cyclists = []
-    pos = 0
-    for team in teams:
-        for i in range(1, riders_per_team + 1):
-            cyclists.append(Cyclist(
-                id=f"{team}{i}",
-                team=team,
-                pos=pos,
-                energy=5,
-                potion_used=False,
-            ))
-            pos += 1
-    # Trier par pos décroissante (convention RaceState)
+    """Crée l'état initial. Cyclistes placés aux positions 0..N-1, ordre aléatoire."""
+    all_riders = [
+        (team, i)
+        for team in teams
+        for i in range(1, riders_per_team + 1)
+    ]
+    random.shuffle(all_riders)
+    cyclists = [
+        Cyclist(id=f"{team}{i}", team=team, pos=pos, energy=5, potion_used=False)
+        for pos, (team, i) in enumerate(all_riders)
+    ]
     cyclists.sort(key=lambda c: c.pos, reverse=True)
     return RaceState(track_length=track_length, cyclists=cyclists, tick=0, finished=[])
 
