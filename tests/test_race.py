@@ -1,5 +1,5 @@
 import pytest
-from race import Cyclist, RaceState, Action, init_race, race_over, winner, resolve, pos_to_xy, render
+from race import Cyclist, RaceState, Action, init_race, race_over, winner, resolve, pos_to_xy, render, build_prompt, parse_action
 
 def test_cyclist_defaults():
     c = Cyclist(id="A1", team="A", pos=0, energy=5, potion_used=False)
@@ -156,3 +156,47 @@ def test_render_contains_start_and_finish():
     frame = render(state)
     assert "[S]" in frame
     assert "[F]" in frame
+
+
+def test_build_prompt_contains_cyclist_id():
+    state = init_race(60, ["A","B","C"], 3)
+    c = state.cyclists[0]
+    prompt = build_prompt(c, state)
+    assert c.id in prompt
+
+def test_build_prompt_contains_energy():
+    state = init_race(60, ["A","B","C"], 3)
+    c = state.cyclists[0]
+    prompt = build_prompt(c, state)
+    assert str(c.energy) in prompt
+
+def test_build_prompt_contains_valid_actions():
+    state = init_race(60, ["A","B","C"], 3)
+    c = state.cyclists[0]
+    prompt = build_prompt(c, state)
+    assert "advance" in prompt
+    assert "draft" in prompt
+    assert "potion" in prompt
+
+def test_build_prompt_shows_potion_used():
+    state = init_race(60, ["A"], 1)
+    c = state.cyclists[0]
+    c.potion_used = True
+    prompt = build_prompt(c, state)
+    assert "utilisée" in prompt.lower() or "used" in prompt.lower()
+
+def test_parse_action_valid():
+    assert parse_action("advance") == "advance"
+    assert parse_action("ADVANCE") == "advance"
+    assert parse_action("  draft  ") == "draft"
+
+def test_parse_action_fallback_on_invalid():
+    # Si Claude répond n'importe quoi → fallback "advance"
+    assert parse_action("je veux aller vite") == "advance"
+    assert parse_action("") == "advance"
+    assert parse_action("go go go") == "advance"
+
+def test_parse_action_extracts_word_from_sentence():
+    # Claude peut répondre "I choose draft" → on extrait "draft"
+    assert parse_action("I choose draft") == "draft"
+    assert parse_action("Ma décision: slow") == "slow"
