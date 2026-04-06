@@ -363,7 +363,7 @@ def test_resolve_potion_adds_energy():
     new = resolve(state, {"A1": "potion"})
     a1 = new.cyclists[0]
     assert a1.potion_used is True
-    assert a1.energy == 5  # 2 -1(front) +3(potion) = 4, clamped... non: 2+3-1=4
+    assert a1.energy == 4  # 2 -1(front) +3(potion) = 4
 
 def test_resolve_potion_already_used_no_effect():
     state = _make_state(_c("A1","A",10, energy=3, potion_used=True))
