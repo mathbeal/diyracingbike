@@ -132,6 +132,97 @@ def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
 
 
 # =============================================================================
+# RENDU
+# =============================================================================
+
+TEAM_COLORS = {"A": "\033[94m", "B": "\033[93m", "C": "\033[92m"}
+RESET = "\033[0m"
+ENERGY_CHARS = {5: "▓▓▓▓▓", 4: "▓▓▓▓░", 3: "▓▓▓░░", 2: "▓▓░░░", 1: "▓░░░░"}
+
+
+def pos_to_xy(pos: int, track_length: int) -> tuple[int, int]:
+    """Convertit une position 1D en (segment/row, colonne) pour le rendu serpentin."""
+    seg_len = track_length // 3
+    segment = min(pos // seg_len, 2)
+    offset = pos % seg_len
+    col = offset if segment % 2 == 0 else seg_len - 1 - offset
+    return (segment, col)
+
+
+def render(state: RaceState) -> str:
+    """Retourne une frame ASCII complète de l'état de la course."""
+    seg_len = state.track_length // 3
+    width = seg_len  # nombre de colonnes par segment
+
+    # Grille : 3 segments × width colonnes, chaque cellule = (cyclist_id | None)
+    grid: list[list[str | None]] = [[None] * width for _ in range(3)]
+    energy_grid: list[list[str | None]] = [[None] * width for _ in range(3)]
+
+    for c in state.cyclists:
+        if c.pos >= state.track_length:
+            continue
+        row, col = pos_to_xy(c.pos, state.track_length)
+        color = TEAM_COLORS.get(c.team, "")
+        grid[row][col] = f"{color}{c.id}{RESET}"
+        energy_grid[row][col] = f"{color}{ENERGY_CHARS[c.energy]}{RESET}"
+
+    def render_row(row_idx: int) -> list[str]:
+        """Retourne les deux lignes (cyclistes + énergie) d'un segment."""
+        cells = grid[row_idx]
+        ecells = energy_grid[row_idx]
+        cyclist_line = " ".join(c if c else " · " for c in cells)
+        energy_line  = " ".join(e if e else "   " for e in ecells)
+        return [cyclist_line, energy_line]
+
+    sep = "═" * (width * 4)
+    corner_r = "┓"
+    corner_l = "┗"
+
+    lines = []
+    lines.append(f"{'─'*60}")
+    lines.append(f"  🚴 VÉLO ASYNC RACE   Tick {state.tick:>3}   Cyclistes finis: {len(state.finished)}/9")
+    lines.append(f"{'─'*60}")
+
+    # Segment 0 (haut, gauche→droite)
+    s0_cyclists, s0_energy = render_row(0)
+    lines.append(f"[S]━╔{sep}╗━━━{corner_r}")
+    lines.append(f"   ║ {s0_cyclists} ║   ┃")
+    lines.append(f"   ║ {s0_energy} ║   ┃")
+    lines.append(f"   ╚{sep}╝   ┃")
+
+    # Segment 1 (milieu, droite→gauche)
+    s1_cyclists, s1_energy = render_row(1)
+    lines.append(f"   ╔{sep}╗   ┃")
+    lines.append(f"   ║ {s1_cyclists} ║━━━┛")
+    lines.append(f"   ║ {s1_energy} ║")
+    lines.append(f"┏━━╚{sep}╝")
+    lines.append(f"┃")
+
+    # Segment 2 (bas, gauche→droite)
+    s2_cyclists, s2_energy = render_row(2)
+    lines.append(f"┃  ╔{sep}╗")
+    lines.append(f"┗━━║ {s2_cyclists} ║━━━[F]")
+    lines.append(f"   ║ {s2_energy} ║")
+    lines.append(f"   ╚{sep}╝")
+
+    # Tableau de scores
+    lines.append(f"{'─'*60}")
+    for team, color in TEAM_COLORS.items():
+        team_cyclists = [c for c in state.cyclists if c.team == team]
+        if not team_cyclists:
+            continue
+        row_parts = []
+        for c in sorted(team_cyclists, key=lambda x: x.id):
+            finished_mark = "✓" if c.id in state.finished else " "
+            row_parts.append(
+                f"{color}{c.id}{RESET}{finished_mark} {color}{ENERGY_CHARS[c.energy]}{RESET} #{c.pos:>2}"
+            )
+        lines.append(f"  ■ {color}{team}{RESET}  " + "   ".join(row_parts))
+
+    return "\n".join(lines)
+
+
+# =============================================================================
 # BOUCLE — helpers
 # =============================================================================
 
