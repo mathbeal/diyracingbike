@@ -6,7 +6,8 @@
       "riders": [
         {"id": "A1", "energy": 5},
         {"id": "A2", "energy": 1},
-        {"id": "A3", "energy": 1}
+        {"id": "A3", "energy": 1},
+        {"id": "A4", "energy": 1}
       ]
     },
     {
@@ -14,7 +15,8 @@
       "riders": [
         {"id": "B1", "energy": 3},
         {"id": "B2", "energy": 3},
-        {"id": "B3", "energy": 3}
+        {"id": "B3", "energy": 3},
+        {"id": "B4", "energy": 3}
       ]
     },
     {
@@ -22,7 +24,8 @@
       "riders": [
         {"id": "C1", "energy": 2},
         {"id": "C2", "energy": 2},
-        {"id": "C3", "energy": 5}
+        {"id": "C3", "energy": 2},
+        {"id": "C4", "energy": 5}
       ]
     }
   ]
