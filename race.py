@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Cycling Race — Agents Async avec Claude
-Objectif didactique : comprendre asyncio.gather + pattern orchestrateur/sous-agents
+Cycling Race — Async Agents with Claude
+Educational goal: understand asyncio.gather + orchestrator/sub-agent pattern
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import anthropic
 load_dotenv()
 
 # =============================================================================
-# MODÈLE
+# MODEL
 # =============================================================================
 
 Action = Literal["advance", "slow", "draft", "potion", "wait"]
@@ -28,17 +28,17 @@ Action = Literal["advance", "slow", "draft", "potion", "wait"]
 class Cyclist:
     id: str           # "A1", "B2", "C3"…
     team: str         # "A", "B", "C"
-    pos: int          # position 1D (0=départ, track_length=arrivée)
-    energy: int       # 1..5 (1=épuisé, 5=plein)
-    potion_used: bool # True si potion déjà consommée
+    pos: int          # 1D position (0=start, track_length=finish)
+    energy: int       # 1..5 (1=exhausted, 5=full)
+    potion_used: bool # True if potion already consumed
 
 
 @dataclass
 class RaceState:
-    track_length: int        # nombre de cases (ex: 60)
-    cyclists: list[Cyclist]  # triés par pos décroissante
+    track_length: int        # number of cells (e.g. 60)
+    cyclists: list[Cyclist]  # sorted by descending position
     tick: int
-    finished: list[str]      # ids dans l'ordre d'arrivée
+    finished: list[str]      # ids in finishing order
 
 
 # =============================================================================
@@ -49,49 +49,49 @@ _VALID_ACTIONS: set[str] = {"advance", "slow", "draft", "potion", "wait"}
 
 
 def build_prompt(cyclist: Cyclist, state: RaceState) -> str:
-    """Construit le prompt envoyé à Claude pour ce cycliste."""
+    """Builds the prompt sent to Claude for this cyclist."""
     others = [c for c in state.cyclists if c.id != cyclist.id]
 
-    # Cyclistes devant (dans un rayon de 5 cases)
+    # Cyclists ahead (within 5 cells)
     ahead = [c for c in others if 0 < c.pos - cyclist.pos <= 5]
-    ahead_str = ", ".join(f"{c.id}(équipe {c.team}) à {c.pos - cyclist.pos} case(s)" for c in ahead)
+    ahead_str = ", ".join(f"{c.id}(team {c.team}) at {c.pos - cyclist.pos} cell(s)" for c in ahead)
 
-    # Cyclistes derrière (dans un rayon de 5 cases)
+    # Cyclists behind (within 5 cells)
     behind = [c for c in others if 0 < cyclist.pos - c.pos <= 5]
-    behind_str = ", ".join(f"{c.id}(équipe {c.team}) à {cyclist.pos - c.pos} case(s)" for c in behind)
+    behind_str = ", ".join(f"{c.id}(team {c.team}) at {cyclist.pos - c.pos} cell(s)" for c in behind)
 
-    # Coéquipiers
+    # Teammates
     teammates = [c for c in state.cyclists if c.team == cyclist.team and c.id != cyclist.id]
     team_str = "  ".join(f"{c.id}:#{c.pos}" for c in teammates)
 
-    potion_status = "déjà utilisée" if cyclist.potion_used else "disponible"
+    potion_status = "already used" if cyclist.potion_used else "available"
 
-    return f"""Tu es le cycliste {cyclist.id} (équipe {cyclist.team}).
-Tick {state.tick} | Position #{cyclist.pos}/{state.track_length} | Énergie: {cyclist.energy}/5
+    return f"""You are cyclist {cyclist.id} (team {cyclist.team}).
+Tick {state.tick} | Position #{cyclist.pos}/{state.track_length} | Energy: {cyclist.energy}/5
 
-Devant toi (≤5 cases): {ahead_str or "personne"}
-Derrière toi (≤5 cases): {behind_str or "personne"}
-Coéquipiers: {team_str}
+Ahead of you (≤5 cells): {ahead_str or "nobody"}
+Behind you (≤5 cells): {behind_str or "nobody"}
+Teammates: {team_str}
 Potion: {potion_status}
 
-Mécanique de vitesse : ta vitesse = ton énergie (ex: énergie 5 → avance de 5 cases).
-Coût énergétique si tu avances : -(énergie÷2 arrondi vers le bas), ex: énergie 5 → -2.
-En roue (≤5 cases derrière un leader) : bonus +1 énergie, même en avançant.
+Speed mechanic: your speed = your energy (e.g. energy 5 → advance 5 cells).
+Energy cost when advancing: -(energy÷2 rounded down), e.g. energy 5 → -2.
+Drafting (≤5 cells behind a leader): +1 energy bonus, even when advancing.
 
-Stratégie: économise ton énergie en te mettant en roue (draft) quand possible.
-Si tu es en tête et épuisé (énergie 1-2), ralentis (slow) pour récupérer.
-Utilise la potion au bon moment (sprint final ou pour remonter).
+Strategy: save energy by drafting when possible.
+If you are in the lead and exhausted (energy 1-2), slow down to recover.
+Use the potion at the right moment (final sprint or to catch up).
 
-Réponds UNIQUEMENT par un seul mot parmi: advance | slow | draft | potion | wait"""
+Reply with ONLY one word from: advance | slow | draft | potion | wait"""
 
 
 def parse_action(text: str) -> Action:
     """
-    Extrait une action valide du texte retourné par Claude.
-    Fallback sur "advance" si aucun mot valide trouvé.
+    Extracts a valid action from the text returned by Claude.
+    Falls back to "advance" if no valid word is found.
     """
     text = text.strip().lower()
-    # Cherche un mot valide dans le texte (Claude peut répondre "I choose draft")
+    # Look for a valid word in the text (Claude may reply "I choose draft")
     for word in text.split():
         clean = word.strip(".,!?:;\"'")
         if clean in _VALID_ACTIONS:
@@ -99,25 +99,25 @@ def parse_action(text: str) -> Action:
     return "advance"  # fallback
 
 
-# Client Anthropic (singleton)
+# Anthropic client (singleton)
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 
 
 async def cyclist_agent(cyclist: Cyclist, state: RaceState) -> tuple[str, Action]:
     """
-    Sous-agent : appelle Claude pour décider de l'action du cycliste.
+    Sub-agent: calls Claude to decide the cyclist's action.
 
-    POINT PÉDAGOGIQUE :
-    - Le SDK Anthropic Python est SYNCHRONE (client.messages.create bloque le thread)
-    - asyncio.to_thread() l'exécute dans un thread pool → ne bloque pas la boucle async
-    - Chaque cyclist_agent est une coroutine indépendante
+    EDUCATIONAL NOTE:
+    - The Anthropic Python SDK is SYNCHRONOUS (client.messages.create blocks the thread)
+    - asyncio.to_thread() runs it in a thread pool → does not block the async loop
+    - Each cyclist_agent is an independent coroutine
     """
     prompt = build_prompt(cyclist, state)
 
     response = await asyncio.to_thread(
         client.messages.create,
         model="claude-haiku-4-5-20251001",
-        max_tokens=10,  # On veut juste un mot → latence minimale
+        max_tokens=10,  # We only want one word → minimal latency
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -127,28 +127,28 @@ async def cyclist_agent(cyclist: Cyclist, state: RaceState) -> tuple[str, Action
 
 async def orchestrator(state: RaceState) -> dict[str, Action]:
     """
-    Orchestrateur : lance tous les agents en parallèle avec asyncio.gather().
+    Orchestrator: launches all agents in parallel with asyncio.gather().
 
-    POINT PÉDAGOGIQUE :
-    - asyncio.gather(*tasks) démarre toutes les coroutines SIMULTANÉMENT
-    - On attend que la PLUS LENTE ait répondu (pas la plus rapide)
-    - return_exceptions=True : un agent qui plante ne bloque pas les autres
-    - Le temps total ≈ max(latences individuelles), pas leur somme
+    EDUCATIONAL NOTE:
+    - asyncio.gather(*tasks) starts all coroutines SIMULTANEOUSLY
+    - We wait until the SLOWEST one has replied (not the fastest)
+    - return_exceptions=True: a failing agent does not block the others
+    - Total time ≈ max(individual latencies), not their sum
     """
     active = [c for c in state.cyclists if c.id not in state.finished]
 
-    # Crée les coroutines (pas encore lancées)
+    # Create the coroutines (not yet started)
     tasks = [cyclist_agent(c, state) for c in active]
 
-    # Lance TOUT en parallèle — c'est ici que la magie async opère
+    # Launch EVERYTHING in parallel — this is where the async magic happens
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     actions: dict[str, Action] = {}
     for i, result in enumerate(results):
         cyclist = active[i]
         if isinstance(result, Exception):
-            # Fallback si Claude échoue pour ce cycliste
-            print(f"  ⚠ Agent {cyclist.id} a échoué ({result}), fallback: advance")
+            # Fallback if Claude fails for this cyclist
+            print(f"  ⚠ Agent {cyclist.id} failed ({result}), fallback: advance")
             actions[cyclist.id] = "advance"
         else:
             cyclist_id, action = result
@@ -158,19 +158,19 @@ async def orchestrator(state: RaceState) -> dict[str, Action]:
 
 
 # =============================================================================
-# MOTEUR
+# ENGINE
 # =============================================================================
 
 def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
     """
-    Moteur synchrone et déterministe.
-    1. Calcule les positions souhaitées (vitesse = énergie pour advance/potion)
-    2. Résout les collisions (le cycliste le plus avancé a priorité)
-    3. Met à jour l'énergie : coût proportionnel à la vitesse, récupération en roue
-    4. Détecte les arrivées
-    Retourne un NOUVEL état — ne mute jamais l'état existant.
+    Synchronous, deterministic engine.
+    1. Computes desired positions (speed = energy for advance/potion)
+    2. Resolves collisions (the most advanced cyclist has priority)
+    3. Updates energy: cost proportional to speed, recovery when drafting
+    4. Detects finishes
+    Returns a NEW state — never mutates the existing state.
     """
-    # 1. Positions souhaitées — vitesse = énergie quand on avance
+    # 1. Desired positions — speed = energy when advancing
     desired: dict[str, int] = {}
     for c in state.cyclists:
         if c.id in state.finished:
@@ -182,14 +182,14 @@ def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
             step = max(1, step + random.randint(-1, 1))
         desired[c.id] = c.pos + step
 
-    # 2. Positions finales — plusieurs cyclistes peuvent partager une case (dépassement permis)
+    # 2. Final positions — multiple cyclists can share a cell (overtaking allowed)
     sorted_cyclists = sorted(state.cyclists, key=lambda c: c.pos, reverse=True)
     final_pos: dict[str, int] = {}
 
     for c in sorted_cyclists:
         final_pos[c.id] = max(desired[c.id], 0)
 
-    # 3. Mise à jour énergie
+    # 3. Energy update
     new_cyclists: list[Cyclist] = []
     for c in state.cyclists:
         if c.id in state.finished:
@@ -200,18 +200,18 @@ def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
         action = actions.get(c.id, "advance")
         advancing = action in ("advance", "potion")
 
-        # Quelqu'un à ≤5 cases devant ? (fenêtre élargie car vitesses plus élevées)
+        # Anyone within ≤5 cells ahead? (wider window because speeds are higher)
         anyone_ahead = any(
             final_pos[o.id] > pos and final_pos[o.id] <= pos + 5
             for o in state.cyclists if o.id != c.id
         )
 
         if advancing:
-            # Coût proportionnel à la vitesse (= énergie actuelle)
-            # En roue : bonus +1 qui réduit le coût (cycliste épuisé peut récupérer)
+            # Cost proportional to speed (= current energy)
+            # Drafting: +1 bonus reduces cost (exhausted cyclist can recover)
             energy_delta = -(c.energy // 2) + (1 if anyone_ahead else 0)
         else:
-            # Récupération : +1 en roue, -1 en tête
+            # Recovery: +1 when drafting, -1 when leading
             energy_delta = 1 if anyone_ahead else -1
 
         # Potion
@@ -229,9 +229,9 @@ def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
             potion_used=new_potion,
         ))
 
-    # 4. Arrivées
+    # 4. Finishes
     new_finished = list(state.finished)
-    # On ajoute dans l'ordre de position décroissante
+    # Add in descending position order
     for c in sorted(new_cyclists, key=lambda c: c.pos, reverse=True):
         if c.pos >= state.track_length and c.id not in new_finished:
             new_finished.append(c.id)
@@ -247,7 +247,7 @@ def resolve(state: RaceState, actions: dict[str, Action]) -> RaceState:
 
 
 # =============================================================================
-# RENDU
+# RENDERING
 # =============================================================================
 
 TEAM_COLORS = {"A": "\033[94m", "B": "\033[93m", "C": "\033[92m"}
@@ -256,7 +256,7 @@ ENERGY_CHARS = {5: "▓▓▓▓▓", 4: "▓▓▓▓░", 3: "▓▓▓░░"
 
 
 def pos_to_xy(pos: int, track_length: int) -> tuple[int, int]:
-    """Convertit une position 1D en (segment/row, colonne) pour le rendu serpentin."""
+    """Converts a 1D position to (segment/row, column) for serpentine rendering."""
     seg_len = track_length // 3
     segment = min(pos // seg_len, 2)
     offset = pos % seg_len
@@ -265,11 +265,11 @@ def pos_to_xy(pos: int, track_length: int) -> tuple[int, int]:
 
 
 def render(state: RaceState) -> str:
-    """Retourne une frame ASCII complète de l'état de la course."""
+    """Returns a complete ASCII frame of the race state."""
     seg_len = state.track_length // 3
-    width = seg_len  # nombre de colonnes par segment
+    width = seg_len  # number of columns per segment
 
-    # Grille : 3 segments × width colonnes, chaque cellule = liste de cyclistes
+    # Grid: 3 segments × width columns, each cell = list of cyclists
     cell_map: dict[tuple[int, int], list[Cyclist]] = {}
     for c in state.cyclists:
         if c.pos >= state.track_length:
@@ -277,7 +277,7 @@ def render(state: RaceState) -> str:
         key = pos_to_xy(c.pos, state.track_length)
         cell_map.setdefault(key, []).append(c)
 
-    # Nombre max de cyclistes dans une même case (au moins 1 pour la mise en page)
+    # Max cyclists in a single cell (at least 1 for layout)
     max_occ = max((len(v) for v in cell_map.values()), default=1)
 
     def cyclist_cell(row_idx: int, col: int, layer: int) -> str:
@@ -307,17 +307,17 @@ def render(state: RaceState) -> str:
 
     lines = []
     lines.append(f"{'─'*60}")
-    lines.append(f"  🚴 VÉLO ASYNC RACE   Tick {state.tick:>3}   Cyclistes finis: {len(state.finished)}/9")
+    lines.append(f"  🚴 ASYNC RACE   Tick {state.tick:>3}   Finished: {len(state.finished)}/9")
     lines.append(f"{'─'*60}")
 
-    # Segment 0 (haut, gauche→droite)
+    # Segment 0 (top, left→right)
     lines.append(f"[S]━╔{sep}╗━━━{corner_r}")
     for layer in range(max_occ):
         lines.append(f"   ║ {render_cyclist_row(0, layer)} ║   ┃")
     lines.append(f"   ║ {render_energy_row(0)} ║   ┃")
     lines.append(f"   ╚{sep}╝   ┃")
 
-    # Segment 1 (milieu, droite→gauche)
+    # Segment 1 (middle, right→left)
     lines.append(f"   ╔{sep}╗   ┃")
     for layer in range(max_occ):
         connector = "━━━┛" if layer == 0 else "   ┃"
@@ -326,7 +326,7 @@ def render(state: RaceState) -> str:
     lines.append(f"┏━━╚{sep}╝")
     lines.append(f"┃")
 
-    # Segment 2 (bas, gauche→droite)
+    # Segment 2 (bottom, left→right)
     lines.append(f"┃  ╔{sep}╗")
     for layer in range(max_occ):
         prefix = "┗━━" if layer == 0 else "   "
@@ -335,7 +335,7 @@ def render(state: RaceState) -> str:
     lines.append(f"   ║ {render_energy_row(2)} ║")
     lines.append(f"   ╚{sep}╝")
 
-    # Tableau de scores
+    # Scoreboard
     lines.append(f"{'─'*60}")
     for team, color in TEAM_COLORS.items():
         team_cyclists = [c for c in state.cyclists if c.team == team]
@@ -353,41 +353,41 @@ def render(state: RaceState) -> str:
 
 
 # =============================================================================
-# BOUCLE — helpers
+# MAIN LOOP — helpers
 # =============================================================================
 
 def validate_config(config: dict) -> None:
-    """Valide la structure d'une config. Lève ValueError si invalide."""
+    """Validates config structure. Raises ValueError if invalid."""
     if "track_length" not in config:
-        raise ValueError("Clé 'track_length' manquante dans la config")
+        raise ValueError("Missing key 'track_length' in config")
     tl = config["track_length"]
     if not isinstance(tl, int) or isinstance(tl, bool) or not (20 <= tl <= 200):
-        raise ValueError(f"track_length doit être un entier entre 20 et 200, reçu: {tl}")
+        raise ValueError(f"track_length must be an integer between 20 and 200, got: {tl}")
 
     teams = config.get("teams", [])
     if len(teams) != 3:
-        raise ValueError(f"La config doit avoir exactement 3 équipes, reçu: {len(teams)}")
+        raise ValueError(f"Config must have exactly 3 teams, got: {len(teams)}")
 
     for team in teams:
         if "name" not in team:
-            raise ValueError(f"Une équipe est manquante du champ 'name'")
+            raise ValueError(f"A team is missing the 'name' field")
         riders = team.get("riders", [])
         if len(riders) != 3:
             raise ValueError(
-                f"Chaque équipe doit avoir exactement 3 cyclistes, équipe {team.get('name')}: {len(riders)}"
+                f"Each team must have exactly 3 cyclists, team {team.get('name')}: {len(riders)}"
             )
         for rider in riders:
             if "id" not in rider:
-                raise ValueError(f"Un cycliste de l'équipe {team['name']} est manquant du champ 'id'")
+                raise ValueError(f"A cyclist in team {team['name']} is missing the 'id' field")
             e = rider.get("energy", 0)
             if not isinstance(e, int) or isinstance(e, bool) or not (1 <= e <= 5):
                 raise ValueError(
-                    f"L'énergie de {rider.get('id')} doit être entre 1 et 5, reçu: {e}"
+                    f"energy for {rider.get('id')} must be between 1 and 5, got: {e}"
                 )
 
 
 def load_config(path: str) -> dict:
-    """Charge et valide un fichier race_config.json. Lève FileNotFoundError ou ValueError."""
+    """Loads and validates a race_config.json file. Raises FileNotFoundError or ValueError."""
     with open(path) as f:
         config = json.load(f)
     validate_config(config)
@@ -395,8 +395,8 @@ def load_config(path: str) -> dict:
 
 
 def init_race_from_config(config: dict) -> RaceState:
-    """Crée l'état initial à partir d'une config JSON validée.
-    Les positions de départ sont mélangées aléatoirement."""
+    """Creates initial state from a validated JSON config.
+    Starting positions are shuffled randomly."""
     all_riders: list[tuple[str, dict]] = []
     for team_data in config["teams"]:
         for rider in team_data["riders"]:
@@ -422,7 +422,7 @@ def init_race_from_config(config: dict) -> RaceState:
 
 
 def init_race(track_length: int, teams: list[str], riders_per_team: int) -> RaceState:
-    """Crée l'état initial. Cyclistes placés aux positions 0..N-1, ordre aléatoire."""
+    """Creates initial state. Cyclists placed at positions 0..N-1, random order."""
     all_riders = [
         (team, i)
         for team in teams
@@ -438,7 +438,7 @@ def init_race(track_length: int, teams: list[str], riders_per_team: int) -> Race
 
 
 def race_over(state: RaceState) -> bool:
-    """La course est finie quand une équipe a ses 3 cyclistes à l'arrivée."""
+    """Race is over when one team has all 3 cyclists at the finish."""
     teams = {c.team for c in state.cyclists}
     for team in teams:
         team_ids = [c.id for c in state.cyclists if c.team == team]
@@ -448,7 +448,7 @@ def race_over(state: RaceState) -> bool:
 
 
 def winner(state: RaceState) -> str:
-    """Retourne l'équipe gagnante (celle dont tous les cyclistes sont finis en premier)."""
+    """Returns the winning team (the one whose all cyclists finished first)."""
     teams = {c.team for c in state.cyclists}
     for team in teams:
         team_ids = [c.id for c in state.cyclists if c.team == team]
@@ -458,7 +458,7 @@ def winner(state: RaceState) -> str:
 
 
 def write_results(state: RaceState, decisions_log: list[dict], path: str) -> None:
-    """Écrit les résultats de la course en JSON."""
+    """Writes race results to JSON."""
     initial_energies = {c.id: c.energy for c in state.cyclists}
     data = {
         "winner": winner(state),
@@ -475,68 +475,68 @@ def write_results(state: RaceState, decisions_log: list[dict], path: str) -> Non
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse les arguments CLI."""
+    """Parses CLI arguments."""
     parser = argparse.ArgumentParser(description="Cycling Race Async Simulation")
     parser.add_argument(
         "--config",
         default="race_config.json",
-        help="Chemin vers le fichier de config (défaut: race_config.json)",
+        help="Path to config file (default: race_config.json)",
     )
     parser.add_argument(
         "--output",
         default=None,
-        help="Chemin vers le fichier de résultats JSON (optionnel)",
+        help="Path to JSON results file (optional)",
     )
     parser.add_argument(
         "--no-interactive",
         action="store_true",
-        help="Mode CI : supprime les prompts interactifs et les pauses",
+        help="CI mode: suppresses interactive prompts and pauses",
     )
     return parser.parse_args()
 
 
 async def main() -> None:
     """
-    Boucle principale de la course.
+    Main race loop.
 
-    POINT PÉDAGOGIQUE — Le flux async/sync :
-    1. orchestrator()  [ASYNC]  → 9 appels Claude en parallèle
-    2. resolve()       [SYNC]   → moteur déterministe, sans appel réseau
-    3. render()        [SYNC]   → affichage ASCII
-    4. Recommencer jusqu'à la fin
+    EDUCATIONAL NOTE — The async/sync flow:
+    1. orchestrator()  [ASYNC]  → 9 Claude calls in parallel
+    2. resolve()       [SYNC]   → deterministic engine, no network calls
+    3. render()        [SYNC]   → ASCII display
+    4. Repeat until finished
 
-    La séparation async/sync est intentionnelle :
-    - Le code async gère la latence réseau (agents Claude)
-    - Le code sync gère la logique de jeu (pas de race condition possible)
+    The async/sync separation is intentional:
+    - Async code handles network latency (Claude agents)
+    - Sync code handles game logic (no race conditions possible)
     """
     args = parse_args()
 
-    # Charger la config (lève FileNotFoundError ou ValueError si invalide)
+    # Load config (raises FileNotFoundError or ValueError if invalid)
     config = load_config(args.config)
     state = init_race_from_config(config)
 
     if not args.no_interactive:
-        print("\n🚴 DÉMARRAGE DE LA COURSE 🚴\n")
+        print("\n🚴 RACE STARTING 🚴\n")
         print(render(state))
-        input("\nAppuyez sur Entrée pour lancer la course...")
+        input("\nPress Enter to start the race...")
 
     decisions_log: list[dict] = []
 
     while not race_over(state):
         if not args.no_interactive:
             print(f"\n{'─'*60}")
-            print(f"⏳ Tick {state.tick + 1} — agents en cours de décision...")
+            print(f"⏳ Tick {state.tick + 1} — agents deciding...")
 
-        # ASYNC : tous les sous-agents décident en parallèle
+        # ASYNC: all sub-agents decide in parallel
         actions = await orchestrator(state)
         decisions_log.append({"tick": state.tick, "decisions": dict(actions)})
 
         if not args.no_interactive:
-            print("  Décisions: " + "  ".join(
+            print("  Decisions: " + "  ".join(
                 f"{cid}:{action}" for cid, action in sorted(actions.items())
             ))
 
-        # SYNC : le moteur résout les conflits
+        # SYNC: engine resolves conflicts
         state = resolve(state, actions)
 
         if not args.no_interactive:
@@ -548,9 +548,9 @@ async def main() -> None:
 
     if not args.no_interactive:
         print(f"\n{'═'*60}")
-        print(f"🏆 VAINQUEUR : Équipe {winner(state)} !")
-        print(f"Classement des arrivées : {', '.join(state.finished)}")
-        print(f"Course terminée en {state.tick} ticks.")
+        print(f"🏆 WINNER: Team {winner(state)}!")
+        print(f"Finishing order: {', '.join(state.finished)}")
+        print(f"Race completed in {state.tick} ticks.")
         print(f"{'═'*60}\n")
     else:
         print(f"winner={winner(state)} ticks={state.tick}")

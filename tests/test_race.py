@@ -41,9 +41,9 @@ def test_init_race_creates_correct_cyclists():
 
 def test_init_race_all_at_start():
     state = init_race(track_length=60, teams=["A","B","C"], riders_per_team=3)
-    # Tous à des positions 0..8 (départ échelonné pour éviter superposition)
+    # All at positions 0..8 (staggered start to avoid overlap)
     positions = [c.pos for c in state.cyclists]
-    assert len(set(positions)) == 9  # toutes différentes
+    assert len(set(positions)) == 9  # all different
     assert all(0 <= p < 9 for p in positions)
 
 def test_race_not_over_at_start():
@@ -66,9 +66,10 @@ def _c(id, team, pos, energy=5, potion_used=False):
     return Cyclist(id=id, team=team, pos=pos, energy=energy, potion_used=potion_used)
 
 def test_resolve_advance_moves_forward():
-    # vitesse = énergie (défaut 5) → avance de 5 cases
+    # speed = energy (default 5) → advances 5 cells; patch RNG to avoid flakiness
     state = _make_state(_c("A1","A",5))
-    new = resolve(state, {"A1": "advance"})
+    with patch("race.random.randint", return_value=0):
+        new = resolve(state, {"A1": "advance"})
     assert new.cyclists[0].pos == 10
 
 def test_resolve_wait_does_not_move():
@@ -77,55 +78,58 @@ def test_resolve_wait_does_not_move():
     assert new.cyclists[0].pos == 5
 
 def test_resolve_superposition_allowed():
-    # Deux cyclistes peuvent partager la même case (dépassement permis)
-    # A1(pos=5,energy=5) avance → 10 ; B1(pos=5,energy=5) avance → 10
+    # Two cyclists can share the same cell (overtaking allowed)
+    # A1(pos=5,energy=5) advances → 10 ; B1(pos=5,energy=5) advances → 10
     state = _make_state(_c("A1","A",5), _c("B1","B",5))
-    new = resolve(state, {"A1": "advance", "B1": "advance"})
+    with patch("race.random.randint", return_value=0):
+        new = resolve(state, {"A1": "advance", "B1": "advance"})
     positions = [c.pos for c in new.cyclists]
-    assert positions[0] == positions[1] == 10  # les deux sur la même case
+    assert positions[0] == positions[1] == 10  # both on the same cell
 
 def test_resolve_energy_decreases_at_front():
-    # en tête, avance : coût = énergie//2 = 5//2 = 2 → énergie 5-2 = 3
+    # leading, advancing: cost = energy//2 = 5//2 = 2 → energy 5-2 = 3
     state = _make_state(_c("A1","A",10, energy=5))
     new = resolve(state, {"A1": "advance"})
     assert new.cyclists[0].energy == 3
 
 def test_resolve_energy_increases_drafting():
-    # B1 épuisé (énergie 1) suit A1 (énergie 5) : vitesse=1, coût 0, bonus roue +1
-    # A1 pos=10→15 (vitesse 5), B1 pos=9→10 (vitesse 1) ; gap=5 ≤ 5 → en roue
-    # B1 energy_delta = -(1//2) + 1 = 0 + 1 = +1 → énergie 1→2
+    # B1 exhausted (energy 1) follows A1 (energy 5): speed=1, cost 0, draft bonus +1
+    # A1 pos=10→15 (speed 5), B1 pos=9→10 (speed 1); gap=5 ≤ 5 → drafting
+    # B1 energy_delta = -(1//2) + 1 = 0 + 1 = +1 → energy 1→2; patch RNG for determinism
     state = _make_state(_c("A1","A",10), _c("B1","B",9, energy=1))
-    new = resolve(state, {"A1": "advance", "B1": "advance"})
+    with patch("race.random.randint", return_value=0):
+        new = resolve(state, {"A1": "advance", "B1": "advance"})
     b1 = next(c for c in new.cyclists if c.id == "B1")
-    assert b1.energy == 2  # cycliste épuisé récupère en suivant un leader rapide
+    assert b1.energy == 2  # exhausted cyclist recovers by following a fast leader
 
 def test_resolve_energy_clamped_at_5():
-    # A1 (énergie 2) avance → pos 10→12. B1 (énergie 5) draft → pos 9.
-    # Gap = 3 ≤ 5 → B1 en roue. energy_delta = +1. Clamp à 5.
-    state = _make_state(_c("A1","A",10, energy=2), _c("B1","B",9, energy=5))
-    new = resolve(state, {"A1": "advance", "B1": "draft"})
+    # A1 (energy 5) at pos=20 → pos 25. B1 (energy 5, draft) at pos=16 → pos 21.
+    # Gap = 4 ≤ 5 → B1 drafting → energy_delta = +1 → clamped at 5.
+    state = _make_state(_c("A1","A",20, energy=5), _c("B1","B",16, energy=5))
+    with patch("race.random.randint", return_value=0):
+        new = resolve(state, {"A1": "advance", "B1": "draft"})
     b1 = next(c for c in new.cyclists if c.id == "B1")
-    assert b1.energy == 5  # clampé à 5, pas dépassé
+    assert b1.energy == 5  # clamped at 5, not exceeded
 
 def test_resolve_energy_min_1():
     state = _make_state(_c("A1","A",10, energy=1))
     new = resolve(state, {"A1": "advance"})
-    assert new.cyclists[0].energy == 1  # jamais en dessous de 1
+    assert new.cyclists[0].energy == 1  # never below 1
 
 def test_resolve_potion_adds_energy():
-    # énergie 2, potion, en tête : coût=-(2//2)=-1, potion=+3 → delta=+2 → énergie=4
+    # energy 2, potion, leading: cost=-(2//2)=-1, potion=+3 → delta=+2 → energy=4
     state = _make_state(_c("A1","A",10, energy=2, potion_used=False))
     new = resolve(state, {"A1": "potion"})
     a1 = new.cyclists[0]
     assert a1.potion_used is True
-    assert a1.energy == 4  # 2 -1(coût) +3(potion) = 4
+    assert a1.energy == 4  # 2 -1(cost) +3(potion) = 4
 
 def test_resolve_potion_already_used_no_effect():
-    # énergie 3, potion déjà utilisée, en tête : coût=-(3//2)=-1 → énergie=2
+    # energy 3, potion already used, leading: cost=-(3//2)=-1 → energy=2
     state = _make_state(_c("A1","A",10, energy=3, potion_used=True))
     new = resolve(state, {"A1": "potion"})
     a1 = new.cyclists[0]
-    assert a1.energy == 2  # potion ignorée → coût vitesse seulement
+    assert a1.energy == 2  # potion ignored → speed cost only
 
 def test_resolve_adds_to_finished():
     state = _make_state(_c("A1","A",19, energy=5))
@@ -138,20 +142,20 @@ def test_resolve_tick_increments():
     assert new.tick == 1
 
 def test_pos_to_xy_segment_0_left_to_right():
-    # Piste de 30 cases, 3 segments de 10
-    # Segment 0 : pos 0-9 → row 0, col 0-9
+    # Track of 30 cells, 3 segments of 10
+    # Segment 0: pos 0-9 → row 0, col 0-9
     assert pos_to_xy(0, 30) == (0, 0)
     assert pos_to_xy(5, 30) == (0, 5)
     assert pos_to_xy(9, 30) == (0, 9)
 
 def test_pos_to_xy_segment_1_right_to_left():
-    # Segment 1 : pos 10-19 → row 1, col 9-0 (inversé)
+    # Segment 1: pos 10-19 → row 1, col 9-0 (reversed)
     assert pos_to_xy(10, 30) == (1, 9)
     assert pos_to_xy(15, 30) == (1, 4)
     assert pos_to_xy(19, 30) == (1, 0)
 
 def test_pos_to_xy_segment_2_left_to_right():
-    # Segment 2 : pos 20-29 → row 2, col 0-9
+    # Segment 2: pos 20-29 → row 2, col 0-9
     assert pos_to_xy(20, 30) == (2, 0)
     assert pos_to_xy(25, 30) == (2, 5)
     assert pos_to_xy(29, 30) == (2, 9)
@@ -200,7 +204,7 @@ def test_build_prompt_shows_potion_used():
     c = state.cyclists[0]
     c.potion_used = True
     prompt = build_prompt(c, state)
-    assert "utilisée" in prompt.lower() or "used" in prompt.lower()
+    assert "used" in prompt.lower()
 
 def test_parse_action_valid():
     assert parse_action("advance") == "advance"
@@ -208,19 +212,19 @@ def test_parse_action_valid():
     assert parse_action("  draft  ") == "draft"
 
 def test_parse_action_fallback_on_invalid():
-    # Si Claude répond n'importe quoi → fallback "advance"
+    # If Claude replies with anything invalid → fallback "advance"
     assert parse_action("je veux aller vite") == "advance"
     assert parse_action("") == "advance"
     assert parse_action("go go go") == "advance"
 
 def test_parse_action_extracts_word_from_sentence():
-    # Claude peut répondre "I choose draft" → on extrait "draft"
+    # Claude may reply "I choose draft" → we extract "draft"
     assert parse_action("I choose draft") == "draft"
     assert parse_action("Ma décision: slow") == "slow"
 
 
 def make_mock_response(text: str):
-    """Crée un faux objet réponse Anthropic."""
+    """Creates a fake Anthropic response object."""
     mock = MagicMock()
     mock.content = [MagicMock(text=text)]
     return mock
@@ -276,7 +280,7 @@ async def test_orchestrator_handles_agent_exception():
     with patch("race.asyncio.to_thread", side_effect=fake_to_thread):
         actions = await orchestrator(state)
 
-    # Tous les cyclistes ont une action (fallback pour le premier)
+    # All cyclists have an action (fallback for the first one)
     assert len(actions) == 9
     assert all(a in _VALID_ACTIONS for a in actions.values())
 
@@ -284,7 +288,7 @@ async def test_orchestrator_handles_agent_exception():
 # --- Helpers for config tests ---
 
 def _write_config(config: dict) -> str:
-    """Écrit une config dans un fichier temporaire, retourne le chemin."""
+    """Writes a config to a temp file, returns the path."""
     f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
     json.dump(config, f)
     f.close()
@@ -302,7 +306,7 @@ VALID_CONFIG = {
 # --- validate_config ---
 
 def test_validate_config_valid():
-    validate_config(VALID_CONFIG)  # ne doit pas lever d'exception
+    validate_config(VALID_CONFIG)  # must not raise
 
 def test_validate_config_missing_track_length():
     bad = {k: v for k, v in VALID_CONFIG.items() if k != "track_length"}
@@ -316,17 +320,17 @@ def test_validate_config_track_length_out_of_range():
 
 def test_validate_config_wrong_team_count():
     bad = {**VALID_CONFIG, "teams": VALID_CONFIG["teams"][:2]}
-    with pytest.raises(ValueError, match="3 équipes"):
+    with pytest.raises(ValueError, match="3 teams"):
         validate_config(bad)
 
 def test_validate_config_wrong_rider_count():
     bad_teams = [
-        {"name": "A", "riders": [{"id": "A1", "energy": 5}, {"id": "A2", "energy": 5}]},  # 2 au lieu de 3
+        {"name": "A", "riders": [{"id": "A1", "energy": 5}, {"id": "A2", "energy": 5}]},  # 2 instead of 3
         VALID_CONFIG["teams"][1],
         VALID_CONFIG["teams"][2],
     ]
     bad = {**VALID_CONFIG, "teams": bad_teams}
-    with pytest.raises(ValueError, match="3 cyclistes"):
+    with pytest.raises(ValueError, match="3 cyclists"):
         validate_config(bad)
 
 def test_validate_config_energy_out_of_range():
@@ -336,7 +340,7 @@ def test_validate_config_energy_out_of_range():
         VALID_CONFIG["teams"][2],
     ]
     bad = {**VALID_CONFIG, "teams": bad_teams}
-    with pytest.raises(ValueError, match="énergie"):
+    with pytest.raises(ValueError, match="energy"):
         validate_config(bad)
 
 # --- load_config ---
@@ -369,7 +373,7 @@ def test_init_race_from_config_uses_custom_energies():
     state = init_race_from_config(VALID_CONFIG)
     a2 = next(c for c in state.cyclists if c.id == "A2")
     b3 = next(c for c in state.cyclists if c.id == "B3")
-    assert a2.energy == 3   # défini dans VALID_CONFIG
+    assert a2.energy == 3   # defined in VALID_CONFIG
     assert b3.energy == 2
 
 def test_init_race_from_config_uses_track_length():

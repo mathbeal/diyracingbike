@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Cycling Race — Background Agents avec multiprocessing
-Objectif didactique : comprendre multiprocessing.Process + Queue inter-processus
+Cycling Race — Background Agents with multiprocessing
+Educational goal: understand multiprocessing.Process + inter-process Queue
 
-Architecture :
-  - 4 spécialistes  : 1 stratège global + 3 analystes énergie (un par équipe)
-  - 9 cyclistes     : un processus par cycliste, consulte les spécialistes
-  - 1 orchestrateur : processus principal, envoie l'état, collecte les actions
+Architecture:
+  - 4 specialists : 1 global strategist + 3 energy analysts (one per team)
+  - 9 cyclists    : one process per cyclist, consults the specialists
+  - 1 orchestrator: main process, sends state, collects actions
 
-Importe la logique métier depuis race.py (resolve, render, init_race, ...).
+Imports business logic from race.py (resolve, render, init_race, ...).
 """
 
 import multiprocessing
@@ -30,20 +30,20 @@ from race import (
     winner,
 )
 
-# Signal d'arrêt envoyé dans les queues pour arrêter proprement les workers
+# Stop signal sent through queues to cleanly shut down workers
 STOP = "STOP"
 
-# Modèle utilisé par tous les workers (changer ici pour tous les mettre à jour)
+# Model used by all workers (change here to update all at once)
 _MODEL = "claude-haiku-4-5-20251001"
 
 
 # =============================================================================
-# SÉRIALISATION
-# (multiprocessing.Queue utilise pickle ; on passe des dicts pour fiabilité)
+# SERIALIZATION
+# (multiprocessing.Queue uses pickle; we pass dicts for reliability)
 # =============================================================================
 
 def serialize_state(state: RaceState) -> dict:
-    """Convertit un RaceState en dict sérialisable (pickle-safe)."""
+    """Converts a RaceState to a serializable dict (pickle-safe)."""
     return {
         "tick": state.tick,
         "track_length": state.track_length,
@@ -62,7 +62,7 @@ def serialize_state(state: RaceState) -> dict:
 
 
 def deserialize_state(data: dict) -> RaceState:
-    """Reconstruit un RaceState depuis un dict."""
+    """Reconstructs a RaceState from a dict."""
     cyclists = [
         Cyclist(
             id=c["id"],
@@ -82,51 +82,51 @@ def deserialize_state(data: dict) -> RaceState:
 
 
 # =============================================================================
-# DATACLASSES DE GESTION DES PROCESSUS
+# PROCESS MANAGEMENT DATACLASSES
 # =============================================================================
 
 @dataclass
 class SpecialistProcess:
-    """Référence vers un processus spécialiste (énergie ou stratège)."""
+    """Reference to a specialist process (energy analyst or strategist)."""
     process: multiprocessing.Process
-    input_q: "multiprocessing.Queue[Any]"  # reçoit des dicts d'état ou STOP
+    input_q: "multiprocessing.Queue[Any]"  # receives state dicts or STOP
 
 
 @dataclass
 class AgentProcess:
-    """Référence vers un processus cycliste."""
+    """Reference to a cyclist process."""
     process: multiprocessing.Process
-    input_q: "multiprocessing.Queue[Any]"   # reçoit des dicts d'état ou STOP
-    output_q: "multiprocessing.Queue[Any]"  # émet des dicts d'action
+    input_q: "multiprocessing.Queue[Any]"   # receives state dicts or STOP
+    output_q: "multiprocessing.Queue[Any]"  # emits action dicts
     cyclist_id: str
 
 
 # =============================================================================
-# WORKERS SPÉCIALISTES
-# (tournent dans des processus séparés, font des appels Claude synchrones)
+# SPECIALIST WORKERS
+# (run in separate processes, make synchronous Claude calls)
 # =============================================================================
 
 def energy_worker(team: str, input_q: multiprocessing.Queue, reco_q: multiprocessing.Queue) -> None:
     """
-    Analyse l'énergie des 3 cyclistes de l'équipe et publie une recommandation.
+    Analyses the energy of the team's 3 cyclists and publishes a recommendation.
 
-    POINT PÉDAGOGIQUE :
-    - Tourne dans son propre processus OS (PID distinct, mémoire isolée)
-    - Utilise le SDK Anthropic synchrone (pas d'asyncio ici)
-    - Boucle infinie jusqu'au signal STOP
+    EDUCATIONAL NOTE:
+    - Runs in its own OS process (distinct PID, isolated memory)
+    - Uses the synchronous Anthropic SDK (no asyncio here)
+    - Infinite loop until STOP signal
     """
     client = anthropic.Anthropic()
 
     while True:
-        msg = input_q.get()   # bloquant — attend le prochain état
+        msg = input_q.get()   # blocking — waits for next state
         if msg == STOP:
             break
 
         team_cyclists = [c for c in msg["cyclists"] if c["team"] == team]
         prompt = (
-            f"Tu es l'analyste énergie de l'équipe {team}.\n"
-            f"Cyclistes: {team_cyclists}\n"
-            f"En une phrase courte, donne un conseil de gestion d'énergie pour ce tick."
+            f"You are the energy analyst for team {team}.\n"
+            f"Cyclists: {team_cyclists}\n"
+            f"In one short sentence, give an energy management tip for this tick."
         )
         try:
             response = client.messages.create(
@@ -137,16 +137,16 @@ def energy_worker(team: str, input_q: multiprocessing.Queue, reco_q: multiproces
             reco_q.put({"tick": msg["tick"], "advice": response.content[0].text})
         except Exception as e:
             print(f"  ⚠️  energy_worker {team} tick {msg['tick']} error: {e}", flush=True)
-            # Ne publie rien — les cyclistes liront sans conseil énergie ce tick
+            # Publishes nothing — cyclists will decide without energy advice this tick
 
 
 def strategist_worker(input_q: multiprocessing.Queue, strategy_q: multiprocessing.Queue) -> None:
     """
-    Observe les positions de toutes les équipes et publie une tactique globale.
+    Observes all team positions and publishes a global tactic.
 
-    POINT PÉDAGOGIQUE :
-    - strategy_q est lue par 9 cyclistes (Queue FIFO — seul le premier lecteur obtient le message)
-    - Comportement intentionnel pour l'exercice : voir spec section 9
+    EDUCATIONAL NOTE:
+    - strategy_q is read by 9 cyclists (FIFO Queue — only the first reader gets the message)
+    - Intentional behavior for the exercise: see spec section 9
     """
     client = anthropic.Anthropic()
 
@@ -157,9 +157,9 @@ def strategist_worker(input_q: multiprocessing.Queue, strategy_q: multiprocessin
 
         leaders = sorted(msg["cyclists"], key=lambda c: c["pos"], reverse=True)[:3]
         prompt = (
-            f"Tu es le stratège de course. Tick {msg['tick']}.\n"
+            f"You are the race strategist. Tick {msg['tick']}.\n"
             f"Leaders: {leaders}\n"
-            f"En une phrase courte, donne une tactique globale."
+            f"In one short sentence, give a global tactic."
         )
         try:
             response = client.messages.create(
@@ -170,11 +170,11 @@ def strategist_worker(input_q: multiprocessing.Queue, strategy_q: multiprocessin
             strategy_q.put({"tick": msg["tick"], "advice": response.content[0].text})
         except Exception as e:
             print(f"  ⚠️  strategist_worker tick {msg['tick']} error: {e}", flush=True)
-            # Ne publie rien — les cyclistes décident sans conseil stratégie ce tick
+            # Publishes nothing — cyclists decide without strategy advice this tick
 
 
 # =============================================================================
-# WORKER CYCLISTE
+# CYCLIST WORKER
 # =============================================================================
 
 def build_prompt_bg(
@@ -183,32 +183,32 @@ def build_prompt_bg(
     energy_advice: str,
     strategy_advice: str,
 ) -> str:
-    """Construit le prompt pour un cycliste en intégrant les conseils des spécialistes."""
+    """Builds the prompt for a cyclist, incorporating specialist advice."""
     others = [c for c in state.cyclists if c.id != cyclist.id and c.id not in state.finished]
     ahead = sorted([c for c in others if c.pos > cyclist.pos], key=lambda c: c.pos)
     behind = sorted([c for c in others if c.pos < cyclist.pos], key=lambda c: c.pos, reverse=True)
 
     prompt = (
-        f"Tu es le cycliste {cyclist.id} (équipe {cyclist.team}).\n"
-        f"Position: {cyclist.pos}/{state.track_length}. Énergie: {cyclist.energy}/5.\n"
-        f"Potion utilisée: {'oui' if cyclist.potion_used else 'non'}.\n"
-        f"Devant toi: {[c.id for c in ahead]}.\n"
-        f"Derrière toi: {[c.id for c in behind]}.\n"
+        f"You are cyclist {cyclist.id} (team {cyclist.team}).\n"
+        f"Position: {cyclist.pos}/{state.track_length}. Energy: {cyclist.energy}/5.\n"
+        f"Potion used: {'yes' if cyclist.potion_used else 'no'}.\n"
+        f"Ahead of you: {[c.id for c in ahead]}.\n"
+        f"Behind you: {[c.id for c in behind]}.\n"
     )
 
     if energy_advice:
-        prompt += f"\nConseil énergie (spécialiste équipe): {energy_advice}"
+        prompt += f"\nEnergy advice (team specialist): {energy_advice}"
     if strategy_advice:
-        prompt += f"\nConseil stratégie (stratège global): {strategy_advice}"
+        prompt += f"\nStrategy advice (global strategist): {strategy_advice}"
 
     prompt += (
-        "\n\nActions disponibles:\n"
-        "- advance: avance d'1 case (coûte 1 énergie)\n"
-        "- slow: avance lentement (récupère +1 énergie si > 1)\n"
-        "- draft: reste dans le sillage du cycliste devant (+1 énergie)\n"
-        "- potion: boost unique +3 énergie puis advance\n"
-        "- wait: reste sur place, récupère +1 énergie\n"
-        "\nRéponds avec UN SEUL mot parmi: advance slow draft potion wait"
+        "\n\nAvailable actions:\n"
+        "- advance: move forward 1 cell (costs 1 energy)\n"
+        "- slow: move slowly (recovers +1 energy if > 1)\n"
+        "- draft: stay in the slipstream of the cyclist ahead (+1 energy)\n"
+        "- potion: unique +3 energy boost then advance\n"
+        "- wait: stay in place, recover +1 energy\n"
+        "\nReply with ONE word from: advance slow draft potion wait"
     )
     return prompt
 
@@ -222,30 +222,30 @@ def cyclist_worker(
     strategy_q: multiprocessing.Queue,
 ) -> None:
     """
-    Décide de l'action du cycliste en consultant les recommandations disponibles.
+    Decides the cyclist's action by consulting available recommendations.
 
-    POINT PÉDAGOGIQUE :
-    - get_nowait() = lecture non-bloquante : si les spécialistes n'ont pas encore répondu,
-      le cycliste décide quand même (avec moins d'info)
-    - Illustre la tolérance aux pannes : un agent absent ne bloque pas les autres
-    - reco_q est partagée entre les 3 cyclistes de l'équipe (Queue FIFO) :
-      seul le premier cycliste à appeler get_nowait() obtient le conseil énergie.
-      Comportement intentionnel — cf. spec section 9.
+    EDUCATIONAL NOTE:
+    - get_nowait() = non-blocking read: if specialists haven't responded yet,
+      the cyclist still decides (with less information)
+    - Illustrates fault tolerance: a missing agent does not block the others
+    - reco_q is shared among the 3 cyclists of the team (FIFO Queue):
+      only the first cyclist to call get_nowait() gets the energy advice.
+      Intentional behavior — see spec section 9.
     """
     client = anthropic.Anthropic()
 
     while True:
-        msg = input_q.get()   # bloquant — attend le prochain état
+        msg = input_q.get()   # blocking — waits for next state
         if msg == STOP:
             break
 
         state = deserialize_state(msg)
         cyclist = next(c for c in state.cyclists if c.id == cyclist_id)
 
-        # Consultation non-bloquante des spécialistes
-        # Note : le tick du conseil n'est pas validé intentionnellement.
-        # Un conseil d'un tick précédent est préférable à l'absence de conseil
-        # (tolérance au décalage temporel entre spécialistes et cyclistes).
+        # Non-blocking specialist consultation
+        # Note: tick of advice is not validated intentionally.
+        # An advice from a previous tick is preferable to no advice at all
+        # (tolerance to temporal lag between specialists and cyclists).
         energy_advice = ""
         strategy_advice = ""
         try:
@@ -272,32 +272,32 @@ def cyclist_worker(
 
 
 # =============================================================================
-# ORCHESTRATEUR ET BOUCLE PRINCIPALE
+# ORCHESTRATOR AND MAIN LOOP
 # =============================================================================
 
 def spawn_all(
     state: RaceState,
 ) -> tuple[dict[str, "AgentProcess"], dict[str, "SpecialistProcess"], multiprocessing.Queue, dict[str, multiprocessing.Queue]]:
     """
-    Lance les 13 processus background.
+    Launches all 13 background processes.
 
-    Retourne:
+    Returns:
         agents       : cyclist_id → AgentProcess
-        specialists  : nom → SpecialistProcess
-        strategy_q   : queue partagée (écrite par stratège, lue par cyclistes)
-        reco_queues  : team → Queue (écrite par energy worker, lue par cyclistes équipe)
+        specialists  : name → SpecialistProcess
+        strategy_q   : shared queue (written by strategist, read by cyclists)
+        reco_queues  : team → Queue (written by energy worker, read by team cyclists)
     """
     strategy_q: multiprocessing.Queue = multiprocessing.Queue()
     reco_queues: dict[str, multiprocessing.Queue] = {}
     specialists: dict[str, SpecialistProcess] = {}
 
-    # Stratège global (1 processus)
+    # Global strategist (1 process)
     sq_input: multiprocessing.Queue = multiprocessing.Queue()
     p = multiprocessing.Process(target=strategist_worker, args=(sq_input, strategy_q), daemon=True)
     p.start()
     specialists["strategist"] = SpecialistProcess(p, sq_input)
 
-    # Analystes énergie (3 processus, un par équipe)
+    # Energy analysts (3 processes, one per team)
     teams = list(dict.fromkeys(c.team for c in state.cyclists))
     for team in teams:
         rq: multiprocessing.Queue = multiprocessing.Queue()
@@ -307,7 +307,7 @@ def spawn_all(
         p.start()
         specialists[f"energy_{team}"] = SpecialistProcess(p, eq_input)
 
-    # Cyclistes (9 processus)
+    # Cyclists (9 processes)
     agents: dict[str, AgentProcess] = {}
     for c in state.cyclists:
         cq_input: multiprocessing.Queue = multiprocessing.Queue()
@@ -329,25 +329,25 @@ def orchestrator_bg(
     specialists: dict[str, "SpecialistProcess"],
 ) -> dict[str, str]:
     """
-    Envoie l'état à tous les processus, collecte les actions avec deadline partagée.
+    Sends state to all processes, collects actions with a shared deadline.
 
-    POINT PÉDAGOGIQUE :
-    - Deadline partagée = les 9 agents ont 5s au total (pas 5s chacun).
-      Le dernier agent à répondre peut avoir moins d'1s.
-    - Si un cycliste dépasse la deadline : fallback "advance" (tolérance aux pannes).
+    EDUCATIONAL NOTE:
+    - Shared deadline = all 9 agents have 5s total (not 5s each).
+      The last agent to respond may have less than 1s.
+    - If a cyclist exceeds the deadline: fallback "advance" (fault tolerance).
     """
     msg = serialize_state(state)
     active = [c for c in state.cyclists if c.id not in state.finished]
 
-    # Envoyer aux spécialistes (ils publient dans reco_queues / strategy_q)
+    # Send to specialists (they publish into reco_queues / strategy_q)
     for spec in specialists.values():
         spec.input_q.put(msg)
 
-    # Envoyer aux cyclistes actifs
+    # Send to active cyclists
     for c in active:
         agents[c.id].input_q.put(msg)
 
-    # Collecter avec deadline partagée de 5 secondes
+    # Collect with a shared 5-second deadline
     actions: dict[str, str] = {}
     deadline = time.monotonic() + 5.0
     for c in active:
@@ -364,23 +364,23 @@ def orchestrator_bg(
 
 def main() -> None:
     """
-    Boucle principale — version background agents.
+    Main loop — background agents version.
 
-    POINT PÉDAGOGIQUE — Comparaison avec race.py :
+    EDUCATIONAL NOTE — Comparison with race.py:
     ┌─────────────────┬──────────────────────┬──────────────────────────┐
     │                 │ race.py (foreground)  │ race_bg.py (background)  │
     ├─────────────────┼──────────────────────┼──────────────────────────┤
-    │ Parallélisme    │ Coopératif (asyncio)  │ Préemptif (OS scheduler) │
-    │ Agents          │ Coroutines éphémères  │ Processus persistants    │
-    │ Communication   │ Appel de fonction     │ multiprocessing.Queue    │
-    │ Isolation       │ Mémoire partagée      │ Mémoire séparée          │
-    │ Timeout         │ Non                   │ Oui (deadline 5s)        │
-    │ Spécialisation  │ Non                   │ Oui (3 couches)          │
+    │ Parallelism     │ Cooperative (asyncio) │ Preemptive (OS scheduler)│
+    │ Agents          │ Ephemeral coroutines  │ Persistent processes     │
+    │ Communication   │ Function calls        │ multiprocessing.Queue    │
+    │ Isolation       │ Shared memory         │ Separate memory          │
+    │ Timeout         │ No                    │ Yes (5s deadline)        │
+    │ Specialization  │ No                    │ Yes (3 layers)           │
     └─────────────────┴──────────────────────┴──────────────────────────┘
     """
     state = init_race(60, ["A", "B", "C"], 3)
     agents, specialists, strategy_q, reco_queues = spawn_all(state)
-    print(f"✓ 13 processus lancés (1 stratège + 3 energy workers + 9 cyclistes)")
+    print(f"✓ 13 processes launched (1 strategist + 3 energy workers + 9 cyclists)")
     print(render(state))
 
     while not race_over(state):
@@ -389,9 +389,9 @@ def main() -> None:
         print(render(state))
         time.sleep(0.3)
 
-    print(f"\n🏆 VAINQUEUR : Équipe {winner(state)} !")
+    print(f"\n🏆 WINNER: Team {winner(state)}!")
 
-    # Arrêt propre de tous les workers
+    # Clean shutdown of all workers
     all_workers = list(agents.values()) + list(specialists.values())
     for w in all_workers:
         w.input_q.put(STOP)
@@ -400,10 +400,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # spawn requis pour éviter les fork-safety issues avec le SDK Anthropic
-    # (défaut sur macOS/Windows ; préférable sur Linux aussi)
+    # spawn required to avoid fork-safety issues with the Anthropic SDK
+    # (default on macOS/Windows; preferable on Linux too)
     try:
         multiprocessing.set_start_method("spawn")
     except RuntimeError:
-        pass  # Déjà configuré
+        pass  # Already configured
     main()

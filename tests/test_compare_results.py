@@ -38,8 +38,8 @@ def test_generate_comment_returns_markdown():
 
 def test_generate_comment_shows_winner():
     comment = generate_comment(BASELINE, PR_RESULT)
-    assert "Équipe B" in comment
-    assert "Équipe A" in comment
+    assert "Team B" in comment
+    assert "Team A" in comment
 
 
 def test_generate_comment_shows_ticks():
