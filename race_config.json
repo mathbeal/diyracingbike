@@ -4,25 +4,25 @@
     {
       "name": "A",
       "riders": [
-        {"id": "A1", "energy": 10},
-        {"id": "A2", "energy": 10},
-        {"id": "A3", "energy": 10}
+        {"id": "A1", "energy": 5},
+        {"id": "A2", "energy": 5},
+        {"id": "A3", "energy": 5}
       ]
     },
     {
       "name": "B",
       "riders": [
-        {"id": "B1", "energy": 10},
-        {"id": "B2", "energy": 10},
-        {"id": "B3", "energy": 10}
+        {"id": "B1", "energy": 5},
+        {"id": "B2", "energy": 5},
+        {"id": "B3", "energy": 5}
       ]
     },
     {
       "name": "C",
       "riders": [
-        {"id": "C1", "energy": 10},
-        {"id": "C2", "energy": 10},
-        {"id": "C3", "energy": 10}
+        {"id": "C1", "energy": 5},
+        {"id": "C2", "energy": 5},
+        {"id": "C3", "energy": 5}
       ]
     }
   ]
