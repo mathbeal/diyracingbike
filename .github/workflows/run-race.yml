@@ -69,19 +69,26 @@ jobs:
             try {
               await github.rest.repos.getBranch({ ...context.repo, branch });
             } catch {
-              const { data: emptyTree } = await github.rest.git.createTree({
-                ...context.repo, tree: [],
+              // GitHub API rejects empty trees — seed with a README blob
+              const { data: blob } = await github.rest.git.createBlob({
+                ...context.repo,
+                content: Buffer.from('# Race Plots').toString('base64'),
+                encoding: 'base64',
               });
-              const { data: emptyCommit } = await github.rest.git.createCommit({
+              const { data: initTree } = await github.rest.git.createTree({
+                ...context.repo,
+                tree: [{ path: 'README.md', mode: '100644', type: 'blob', sha: blob.sha }],
+              });
+              const { data: initCommit } = await github.rest.git.createCommit({
                 ...context.repo,
                 message: 'init: race-plots branch',
-                tree: emptyTree.sha,
+                tree: initTree.sha,
                 parents: [],
               });
               await github.rest.git.createRef({
                 ...context.repo,
                 ref: `refs/heads/${branch}`,
-                sha: emptyCommit.sha,
+                sha: initCommit.sha,
               });
             }
 
