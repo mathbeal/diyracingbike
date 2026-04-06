@@ -91,6 +91,64 @@ def parse_action(text: str) -> Action:
     return "advance"  # fallback
 
 
+# Client Anthropic (singleton)
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+
+
+async def cyclist_agent(cyclist: Cyclist, state: RaceState) -> tuple[str, Action]:
+    """
+    Sous-agent : appelle Claude pour décider de l'action du cycliste.
+
+    POINT PÉDAGOGIQUE :
+    - Le SDK Anthropic Python est SYNCHRONE (client.messages.create bloque le thread)
+    - asyncio.to_thread() l'exécute dans un thread pool → ne bloque pas la boucle async
+    - Chaque cyclist_agent est une coroutine indépendante
+    """
+    prompt = build_prompt(cyclist, state)
+
+    response = await asyncio.to_thread(
+        client.messages.create,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=10,  # On veut juste un mot → latence minimale
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    action = parse_action(response.content[0].text)
+    return (cyclist.id, action)
+
+
+async def orchestrator(state: RaceState) -> dict[str, Action]:
+    """
+    Orchestrateur : lance tous les agents en parallèle avec asyncio.gather().
+
+    POINT PÉDAGOGIQUE :
+    - asyncio.gather(*tasks) démarre toutes les coroutines SIMULTANÉMENT
+    - On attend que la PLUS LENTE ait répondu (pas la plus rapide)
+    - return_exceptions=True : un agent qui plante ne bloque pas les autres
+    - Le temps total ≈ max(latences individuelles), pas leur somme
+    """
+    active = [c for c in state.cyclists if c.id not in state.finished]
+
+    # Crée les coroutines (pas encore lancées)
+    tasks = [cyclist_agent(c, state) for c in active]
+
+    # Lance TOUT en parallèle — c'est ici que la magie async opère
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    actions: dict[str, Action] = {}
+    for i, result in enumerate(results):
+        cyclist = active[i]
+        if isinstance(result, Exception):
+            # Fallback si Claude échoue pour ce cycliste
+            print(f"  ⚠ Agent {cyclist.id} a échoué ({result}), fallback: advance")
+            actions[cyclist.id] = "advance"
+        else:
+            cyclist_id, action = result
+            actions[cyclist_id] = action
+
+    return actions
+
+
 # =============================================================================
 # MOTEUR
 # =============================================================================
