@@ -1,5 +1,5 @@
 import pytest
-from race import Cyclist, RaceState, Action, init_race, race_over, winner, resolve
+from race import Cyclist, RaceState, Action, init_race, race_over, winner, resolve, pos_to_xy, render
 
 def test_cyclist_defaults():
     c = Cyclist(id="A1", team="A", pos=0, energy=5, potion_used=False)
@@ -119,3 +119,40 @@ def test_resolve_tick_increments():
     state = _make_state(_c("A1","A",5))
     new = resolve(state, {"A1": "advance"})
     assert new.tick == 1
+
+def test_pos_to_xy_segment_0_left_to_right():
+    # Piste de 30 cases, 3 segments de 10
+    # Segment 0 : pos 0-9 → row 0, col 0-9
+    assert pos_to_xy(0, 30) == (0, 0)
+    assert pos_to_xy(5, 30) == (0, 5)
+    assert pos_to_xy(9, 30) == (0, 9)
+
+def test_pos_to_xy_segment_1_right_to_left():
+    # Segment 1 : pos 10-19 → row 1, col 9-0 (inversé)
+    assert pos_to_xy(10, 30) == (1, 9)
+    assert pos_to_xy(15, 30) == (1, 4)
+    assert pos_to_xy(19, 30) == (1, 0)
+
+def test_pos_to_xy_segment_2_left_to_right():
+    # Segment 2 : pos 20-29 → row 2, col 0-9
+    assert pos_to_xy(20, 30) == (2, 0)
+    assert pos_to_xy(25, 30) == (2, 5)
+    assert pos_to_xy(29, 30) == (2, 9)
+
+def test_render_returns_string():
+    state = init_race(track_length=30, teams=["A","B"], riders_per_team=2)
+    frame = render(state)
+    assert isinstance(frame, str)
+    assert len(frame) > 0
+
+def test_render_contains_team_ids():
+    state = init_race(track_length=30, teams=["A","B"], riders_per_team=2)
+    frame = render(state)
+    assert "A1" in frame
+    assert "B1" in frame
+
+def test_render_contains_start_and_finish():
+    state = init_race(track_length=30, teams=["A","B"], riders_per_team=2)
+    frame = render(state)
+    assert "[S]" in frame
+    assert "[F]" in frame
