@@ -1,5 +1,5 @@
 import pytest
-from race import Cyclist, RaceState, Action, init_race, race_over, winner
+from race import Cyclist, RaceState, Action, init_race, race_over, winner, resolve
 
 def test_cyclist_defaults():
     c = Cyclist(id="A1", team="A", pos=0, energy=5, potion_used=False)
@@ -49,3 +49,73 @@ def test_winner_returns_team_when_all_finished():
     state = RaceState(track_length=60, cyclists=[c1,c2,c3], tick=20,
                       finished=["A1","A2","A3"])
     assert winner(state) == "A"
+
+
+def _make_state(*cyclists):
+    return RaceState(track_length=20, cyclists=list(cyclists), tick=0, finished=[])
+
+def _c(id, team, pos, energy=5, potion_used=False):
+    return Cyclist(id=id, team=team, pos=pos, energy=energy, potion_used=potion_used)
+
+def test_resolve_advance_moves_forward():
+    state = _make_state(_c("A1","A",5))
+    new = resolve(state, {"A1": "advance"})
+    assert new.cyclists[0].pos == 6
+
+def test_resolve_wait_does_not_move():
+    state = _make_state(_c("A1","A",5))
+    new = resolve(state, {"A1": "wait"})
+    assert new.cyclists[0].pos == 5
+
+def test_resolve_no_superposition():
+    # Deux cyclistes veulent avancer vers la même case
+    state = _make_state(_c("A1","A",5), _c("B1","B",4))
+    new = resolve(state, {"A1": "advance", "B1": "advance"})
+    positions = [c.pos for c in new.cyclists]
+    assert len(set(positions)) == 2  # pas de superposition
+
+def test_resolve_energy_decreases_at_front():
+    state = _make_state(_c("A1","A",10, energy=5))
+    new = resolve(state, {"A1": "advance"})
+    assert new.cyclists[0].energy == 4  # en tête → -1
+
+def test_resolve_energy_increases_drafting():
+    # A1 en tête, B1 juste derrière
+    state = _make_state(_c("A1","A",10), _c("B1","B",9, energy=3))
+    new = resolve(state, {"A1": "advance", "B1": "advance"})
+    b1 = next(c for c in new.cyclists if c.id == "B1")
+    assert b1.energy == 4  # en roue → +1
+
+def test_resolve_energy_clamped_at_5():
+    state = _make_state(_c("A1","A",10), _c("B1","B",9, energy=5))
+    new = resolve(state, {"A1": "advance", "B1": "draft"})
+    b1 = next(c for c in new.cyclists if c.id == "B1")
+    assert b1.energy == 5  # pas dépassé 5
+
+def test_resolve_energy_min_1():
+    state = _make_state(_c("A1","A",10, energy=1))
+    new = resolve(state, {"A1": "advance"})
+    assert new.cyclists[0].energy == 1  # jamais en dessous de 1
+
+def test_resolve_potion_adds_energy():
+    state = _make_state(_c("A1","A",10, energy=2, potion_used=False))
+    new = resolve(state, {"A1": "potion"})
+    a1 = new.cyclists[0]
+    assert a1.potion_used is True
+    assert a1.energy == 4  # 2 -1(front) +3(potion) = 4
+
+def test_resolve_potion_already_used_no_effect():
+    state = _make_state(_c("A1","A",10, energy=3, potion_used=True))
+    new = resolve(state, {"A1": "potion"})
+    a1 = new.cyclists[0]
+    assert a1.energy == 2  # potion ignorée → -1 front seulement
+
+def test_resolve_adds_to_finished():
+    state = _make_state(_c("A1","A",19, energy=5))
+    new = resolve(state, {"A1": "advance"})
+    assert "A1" in new.finished
+
+def test_resolve_tick_increments():
+    state = _make_state(_c("A1","A",5))
+    new = resolve(state, {"A1": "advance"})
+    assert new.tick == 1
