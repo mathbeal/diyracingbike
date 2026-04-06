@@ -345,7 +345,7 @@ def validate_config(config: dict) -> None:
     if "track_length" not in config:
         raise ValueError("Clé 'track_length' manquante dans la config")
     tl = config["track_length"]
-    if not isinstance(tl, int) or not (20 <= tl <= 200):
+    if not isinstance(tl, int) or isinstance(tl, bool) or not (20 <= tl <= 200):
         raise ValueError(f"track_length doit être un entier entre 20 et 200, reçu: {tl}")
 
     teams = config.get("teams", [])
@@ -353,14 +353,18 @@ def validate_config(config: dict) -> None:
         raise ValueError(f"La config doit avoir exactement 3 équipes, reçu: {len(teams)}")
 
     for team in teams:
+        if "name" not in team:
+            raise ValueError(f"Une équipe est manquante du champ 'name'")
         riders = team.get("riders", [])
         if len(riders) != 3:
             raise ValueError(
                 f"Chaque équipe doit avoir exactement 3 cyclistes, équipe {team.get('name')}: {len(riders)}"
             )
         for rider in riders:
+            if "id" not in rider:
+                raise ValueError(f"Un cycliste de l'équipe {team['name']} est manquant du champ 'id'")
             e = rider.get("energy", 0)
-            if not isinstance(e, int) or not (1 <= e <= 5):
+            if not isinstance(e, int) or isinstance(e, bool) or not (1 <= e <= 5):
                 raise ValueError(
                     f"L'énergie de {rider.get('id')} doit être entre 1 et 5, reçu: {e}"
                 )
