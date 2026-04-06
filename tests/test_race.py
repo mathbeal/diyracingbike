@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from race import (Cyclist, RaceState, Action, init_race, race_over, winner,
                   resolve, pos_to_xy, render, build_prompt, parse_action,
                   cyclist_agent, orchestrator, _VALID_ACTIONS, load_config,
-                  validate_config, init_race_from_config)
+                  validate_config, init_race_from_config, write_results)
 
 def test_cyclist_defaults():
     c = Cyclist(id="A1", team="A", pos=0, energy=5, potion_used=False)
@@ -375,3 +375,36 @@ def test_init_race_from_config_positions_unique():
     state = init_race_from_config(VALID_CONFIG)
     positions = [c.pos for c in state.cyclists]
     assert len(set(positions)) == 9
+
+def test_write_results_creates_file():
+    state = init_race_from_config(VALID_CONFIG)
+    decisions_log = [{"tick": 0, "decisions": {"A1": "advance", "B1": "draft"}}]
+    path = tempfile.mktemp(suffix=".json")
+    try:
+        write_results(state, decisions_log, path)
+        assert os.path.exists(path)
+        with open(path) as f:
+            data = json.load(f)
+        assert "winner" in data
+        assert "ticks" in data
+        assert "finished_order" in data
+        assert "config_summary" in data
+        assert data["ticks"] == state.tick
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+def test_write_results_config_summary_contains_energies():
+    state = init_race_from_config(VALID_CONFIG)
+    decisions_log = []
+    path = tempfile.mktemp(suffix=".json")
+    try:
+        write_results(state, decisions_log, path)
+        with open(path) as f:
+            data = json.load(f)
+        energies = data["config_summary"]["initial_energies"]
+        assert energies["A2"] == 3   # VALID_CONFIG has A2 energy=3
+        assert energies["B3"] == 2
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)

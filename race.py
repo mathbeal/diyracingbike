@@ -7,6 +7,7 @@ Objectif didactique : comprendre asyncio.gather + pattern orchestrateur/sous-age
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Literal
+import argparse
 import asyncio
 import json
 import os
@@ -440,6 +441,44 @@ def winner(state: RaceState) -> str:
     return ""
 
 
+def write_results(state: RaceState, decisions_log: list[dict], path: str) -> None:
+    """Écrit les résultats de la course en JSON."""
+    initial_energies = {c.id: c.energy for c in state.cyclists}
+    data = {
+        "winner": winner(state),
+        "ticks": state.tick,
+        "finished_order": list(state.finished),
+        "config_summary": {
+            "track_length": state.track_length,
+            "initial_energies": initial_energies,
+        },
+        "decisions_log": decisions_log,
+    }
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse les arguments CLI."""
+    parser = argparse.ArgumentParser(description="Cycling Race Async Simulation")
+    parser.add_argument(
+        "--config",
+        default="race_config.json",
+        help="Chemin vers le fichier de config (défaut: race_config.json)",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Chemin vers le fichier de résultats JSON (optionnel)",
+    )
+    parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Mode CI : supprime les prompts interactifs et les pauses",
+    )
+    return parser.parse_args()
+
+
 async def main() -> None:
     """
     Boucle principale de la course.
@@ -454,37 +493,51 @@ async def main() -> None:
     - Le code async gère la latence réseau (agents Claude)
     - Le code sync gère la logique de jeu (pas de race condition possible)
     """
-    print("\n🚴 DÉMARRAGE DE LA COURSE 🚴\n")
-    state = init_race(track_length=60, teams=["A", "B", "C"], riders_per_team=3)
-    print(render(state))
-    input("\nAppuyez sur Entrée pour lancer la course...")
+    args = parse_args()
+
+    # Charger la config (lève FileNotFoundError ou ValueError si invalide)
+    config = load_config(args.config)
+    state = init_race_from_config(config)
+
+    if not args.no_interactive:
+        print("\n🚴 DÉMARRAGE DE LA COURSE 🚴\n")
+        print(render(state))
+        input("\nAppuyez sur Entrée pour lancer la course...")
+
+    decisions_log: list[dict] = []
 
     while not race_over(state):
-        print(f"\n{'─'*60}")
-        print(f"⏳ Tick {state.tick + 1} — agents en cours de décision...")
+        if not args.no_interactive:
+            print(f"\n{'─'*60}")
+            print(f"⏳ Tick {state.tick + 1} — agents en cours de décision...")
 
         # ASYNC : tous les sous-agents décident en parallèle
         actions = await orchestrator(state)
+        decisions_log.append({"tick": state.tick, "decisions": dict(actions)})
 
-        # Afficher les décisions (pédagogique)
-        print("  Décisions: " + "  ".join(
-            f"{cid}:{action}" for cid, action in sorted(actions.items())
-        ))
+        if not args.no_interactive:
+            print("  Décisions: " + "  ".join(
+                f"{cid}:{action}" for cid, action in sorted(actions.items())
+            ))
 
         # SYNC : le moteur résout les conflits
         state = resolve(state, actions)
 
-        # Afficher la frame
-        print(render(state))
+        if not args.no_interactive:
+            print(render(state))
+            await asyncio.sleep(0.3)
 
-        # Pause pour la lisibilité
-        await asyncio.sleep(0.3)
+    if args.output:
+        write_results(state, decisions_log, args.output)
 
-    print(f"\n{'═'*60}")
-    print(f"🏆 VAINQUEUR : Équipe {winner(state)} !")
-    print(f"Classement des arrivées : {', '.join(state.finished)}")
-    print(f"Course terminée en {state.tick} ticks.")
-    print(f"{'═'*60}\n")
+    if not args.no_interactive:
+        print(f"\n{'═'*60}")
+        print(f"🏆 VAINQUEUR : Équipe {winner(state)} !")
+        print(f"Classement des arrivées : {', '.join(state.finished)}")
+        print(f"Course terminée en {state.tick} ticks.")
+        print(f"{'═'*60}\n")
+    else:
+        print(f"winner={winner(state)} ticks={state.tick}")
 
 
 if __name__ == "__main__":
