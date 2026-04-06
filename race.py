@@ -457,7 +457,12 @@ def winner(state: RaceState) -> str:
     return ""
 
 
-def write_results(state: RaceState, decisions_log: list[dict], path: str) -> None:
+def write_results(
+    state: RaceState,
+    decisions_log: list[dict],
+    path: str,
+    state_log: list[dict] | None = None,
+) -> None:
     """Writes race results to JSON."""
     initial_energies = {c.id: c.energy for c in state.cyclists}
     data = {
@@ -470,6 +475,8 @@ def write_results(state: RaceState, decisions_log: list[dict], path: str) -> Non
         },
         "decisions_log": decisions_log,
     }
+    if state_log is not None:
+        data["state_log"] = state_log
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -521,6 +528,18 @@ async def main() -> None:
         input("\nPress Enter to start the race...")
 
     decisions_log: list[dict] = []
+    state_log: list[dict] = []
+
+    def _snapshot(s: RaceState) -> dict:
+        return {
+            "tick": s.tick,
+            "cyclists": [
+                {"id": c.id, "team": c.team, "pos": c.pos, "energy": c.energy}
+                for c in s.cyclists
+            ],
+        }
+
+    state_log.append(_snapshot(state))
 
     while not race_over(state):
         if not args.no_interactive:
@@ -538,13 +557,14 @@ async def main() -> None:
 
         # SYNC: engine resolves conflicts
         state = resolve(state, actions)
+        state_log.append(_snapshot(state))
 
         if not args.no_interactive:
             print(render(state))
             await asyncio.sleep(0.3)
 
     if args.output:
-        write_results(state, decisions_log, args.output)
+        write_results(state, decisions_log, args.output, state_log)
 
     if not args.no_interactive:
         print(f"\n{'═'*60}")
