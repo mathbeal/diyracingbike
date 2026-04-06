@@ -368,14 +368,14 @@ def validate_config(config: dict) -> None:
     if len(teams) != 3:
         raise ValueError(f"Config must have exactly 3 teams, got: {len(teams)}")
 
+    rider_counts = []
     for team in teams:
         if "name" not in team:
             raise ValueError(f"A team is missing the 'name' field")
         riders = team.get("riders", [])
-        if len(riders) != 3:
-            raise ValueError(
-                f"Each team must have exactly 3 cyclists, team {team.get('name')}: {len(riders)}"
-            )
+        if len(riders) < 1:
+            raise ValueError(f"Team {team.get('name')} must have at least 1 rider")
+        rider_counts.append(len(riders))
         for rider in riders:
             if "id" not in rider:
                 raise ValueError(f"A cyclist in team {team['name']} is missing the 'id' field")
@@ -384,6 +384,11 @@ def validate_config(config: dict) -> None:
                 raise ValueError(
                     f"energy for {rider.get('id')} must be between 1 and 5, got: {e}"
                 )
+    if len(set(rider_counts)) > 1:
+        counts_str = ", ".join(
+            f"{t.get('name')}: {n}" for t, n in zip(teams, rider_counts)
+        )
+        raise ValueError(f"All teams must have the same number of riders ({counts_str})")
 
 
 def load_config(path: str) -> dict:
