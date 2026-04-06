@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Cycling Race — Agents Async avec Claude
 Objectif didactique : comprendre asyncio.gather + pattern orchestrateur/sous-agents
@@ -375,3 +376,54 @@ def winner(state: RaceState) -> str:
         if all(cid in state.finished for cid in team_ids):
             return team
     return ""
+
+
+async def main() -> None:
+    """
+    Boucle principale de la course.
+
+    POINT PÉDAGOGIQUE — Le flux async/sync :
+    1. orchestrator()  [ASYNC]  → 9 appels Claude en parallèle
+    2. resolve()       [SYNC]   → moteur déterministe, sans appel réseau
+    3. render()        [SYNC]   → affichage ASCII
+    4. Recommencer jusqu'à la fin
+
+    La séparation async/sync est intentionnelle :
+    - Le code async gère la latence réseau (agents Claude)
+    - Le code sync gère la logique de jeu (pas de race condition possible)
+    """
+    print("\n🚴 DÉMARRAGE DE LA COURSE 🚴\n")
+    state = init_race(track_length=60, teams=["A", "B", "C"], riders_per_team=3)
+    print(render(state))
+    input("\nAppuyez sur Entrée pour lancer la course...")
+
+    while not race_over(state):
+        print(f"\n{'─'*60}")
+        print(f"⏳ Tick {state.tick + 1} — agents en cours de décision...")
+
+        # ASYNC : tous les sous-agents décident en parallèle
+        actions = await orchestrator(state)
+
+        # Afficher les décisions (pédagogique)
+        print("  Décisions: " + "  ".join(
+            f"{cid}:{action}" for cid, action in sorted(actions.items())
+        ))
+
+        # SYNC : le moteur résout les conflits
+        state = resolve(state, actions)
+
+        # Afficher la frame
+        print(render(state))
+
+        # Pause pour la lisibilité
+        await asyncio.sleep(0.3)
+
+    print(f"\n{'═'*60}")
+    print(f"🏆 VAINQUEUR : Équipe {winner(state)} !")
+    print(f"Classement des arrivées : {', '.join(state.finished)}")
+    print(f"Course terminée en {state.tick} ticks.")
+    print(f"{'═'*60}\n")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
