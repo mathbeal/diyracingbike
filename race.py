@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Literal
 import asyncio
+import json
 import os
 from dotenv import load_dotenv
 import anthropic
@@ -338,6 +339,63 @@ def render(state: RaceState) -> str:
 # =============================================================================
 # BOUCLE — helpers
 # =============================================================================
+
+def validate_config(config: dict) -> None:
+    """Valide la structure d'une config. Lève ValueError si invalide."""
+    if "track_length" not in config:
+        raise ValueError("Clé 'track_length' manquante dans la config")
+    tl = config["track_length"]
+    if not isinstance(tl, int) or not (20 <= tl <= 200):
+        raise ValueError(f"track_length doit être un entier entre 20 et 200, reçu: {tl}")
+
+    teams = config.get("teams", [])
+    if len(teams) != 3:
+        raise ValueError(f"La config doit avoir exactement 3 équipes, reçu: {len(teams)}")
+
+    for team in teams:
+        riders = team.get("riders", [])
+        if len(riders) != 3:
+            raise ValueError(
+                f"Chaque équipe doit avoir exactement 3 cyclistes, équipe {team.get('name')}: {len(riders)}"
+            )
+        for rider in riders:
+            e = rider.get("energy", 0)
+            if not isinstance(e, int) or not (1 <= e <= 5):
+                raise ValueError(
+                    f"L'énergie de {rider.get('id')} doit être entre 1 et 5, reçu: {e}"
+                )
+
+
+def load_config(path: str) -> dict:
+    """Charge et valide un fichier race_config.json. Lève FileNotFoundError ou ValueError."""
+    with open(path) as f:
+        config = json.load(f)
+    validate_config(config)
+    return config
+
+
+def init_race_from_config(config: dict) -> RaceState:
+    """Crée l'état initial à partir d'une config JSON validée."""
+    cyclists = []
+    pos = 0
+    for team_data in config["teams"]:
+        for rider in team_data["riders"]:
+            cyclists.append(Cyclist(
+                id=rider["id"],
+                team=team_data["name"],
+                pos=pos,
+                energy=rider["energy"],
+                potion_used=False,
+            ))
+            pos += 1
+    cyclists.sort(key=lambda c: c.pos, reverse=True)
+    return RaceState(
+        track_length=config["track_length"],
+        cyclists=cyclists,
+        tick=0,
+        finished=[],
+    )
+
 
 def init_race(track_length: int, teams: list[str], riders_per_team: int) -> RaceState:
     """Crée l'état initial. Cyclistes placés aux positions 0..N-1 (échelonnés)."""

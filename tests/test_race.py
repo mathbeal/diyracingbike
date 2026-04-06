@@ -1,9 +1,13 @@
 import pytest
 import asyncio
+import json
+import tempfile
+import os
 from unittest.mock import AsyncMock, patch, MagicMock
 from race import (Cyclist, RaceState, Action, init_race, race_over, winner,
                   resolve, pos_to_xy, render, build_prompt, parse_action,
-                  cyclist_agent, orchestrator, _VALID_ACTIONS)
+                  cyclist_agent, orchestrator, _VALID_ACTIONS, load_config,
+                  validate_config, init_race_from_config)
 
 def test_cyclist_defaults():
     c = Cyclist(id="A1", team="A", pos=0, energy=5, potion_used=False)
@@ -266,3 +270,108 @@ async def test_orchestrator_handles_agent_exception():
     # Tous les cyclistes ont une action (fallback pour le premier)
     assert len(actions) == 9
     assert all(a in _VALID_ACTIONS for a in actions.values())
+
+
+# --- Helpers for config tests ---
+
+def _write_config(config: dict) -> str:
+    """Écrit une config dans un fichier temporaire, retourne le chemin."""
+    f = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    json.dump(config, f)
+    f.close()
+    return f.name
+
+VALID_CONFIG = {
+    "track_length": 60,
+    "teams": [
+        {"name": "A", "riders": [{"id": "A1", "energy": 5}, {"id": "A2", "energy": 3}, {"id": "A3", "energy": 5}]},
+        {"name": "B", "riders": [{"id": "B1", "energy": 4}, {"id": "B2", "energy": 5}, {"id": "B3", "energy": 2}]},
+        {"name": "C", "riders": [{"id": "C1", "energy": 5}, {"id": "C2", "energy": 5}, {"id": "C3", "energy": 1}]},
+    ]
+}
+
+# --- validate_config ---
+
+def test_validate_config_valid():
+    validate_config(VALID_CONFIG)  # ne doit pas lever d'exception
+
+def test_validate_config_missing_track_length():
+    bad = {k: v for k, v in VALID_CONFIG.items() if k != "track_length"}
+    with pytest.raises(ValueError, match="track_length"):
+        validate_config(bad)
+
+def test_validate_config_track_length_out_of_range():
+    bad = {**VALID_CONFIG, "track_length": 5}
+    with pytest.raises(ValueError, match="track_length"):
+        validate_config(bad)
+
+def test_validate_config_wrong_team_count():
+    bad = {**VALID_CONFIG, "teams": VALID_CONFIG["teams"][:2]}
+    with pytest.raises(ValueError, match="3 équipes"):
+        validate_config(bad)
+
+def test_validate_config_wrong_rider_count():
+    bad_teams = [
+        {"name": "A", "riders": [{"id": "A1", "energy": 5}, {"id": "A2", "energy": 5}]},  # 2 au lieu de 3
+        VALID_CONFIG["teams"][1],
+        VALID_CONFIG["teams"][2],
+    ]
+    bad = {**VALID_CONFIG, "teams": bad_teams}
+    with pytest.raises(ValueError, match="3 cyclistes"):
+        validate_config(bad)
+
+def test_validate_config_energy_out_of_range():
+    bad_teams = [
+        {"name": "A", "riders": [{"id": "A1", "energy": 6}, {"id": "A2", "energy": 5}, {"id": "A3", "energy": 5}]},
+        VALID_CONFIG["teams"][1],
+        VALID_CONFIG["teams"][2],
+    ]
+    bad = {**VALID_CONFIG, "teams": bad_teams}
+    with pytest.raises(ValueError, match="énergie"):
+        validate_config(bad)
+
+# --- load_config ---
+
+def test_load_config_reads_file():
+    path = _write_config(VALID_CONFIG)
+    try:
+        config = load_config(path)
+        assert config["track_length"] == 60
+        assert len(config["teams"]) == 3
+    finally:
+        os.unlink(path)
+
+def test_load_config_raises_on_missing_file():
+    with pytest.raises(FileNotFoundError):
+        load_config("/nonexistent/path/config.json")
+
+def test_load_config_raises_on_invalid_config():
+    bad = {**VALID_CONFIG, "track_length": 5}
+    path = _write_config(bad)
+    try:
+        with pytest.raises(ValueError):
+            load_config(path)
+    finally:
+        os.unlink(path)
+
+# --- init_race_from_config ---
+
+def test_init_race_from_config_uses_custom_energies():
+    state = init_race_from_config(VALID_CONFIG)
+    a2 = next(c for c in state.cyclists if c.id == "A2")
+    b3 = next(c for c in state.cyclists if c.id == "B3")
+    assert a2.energy == 3   # défini dans VALID_CONFIG
+    assert b3.energy == 2
+
+def test_init_race_from_config_uses_track_length():
+    state = init_race_from_config(VALID_CONFIG)
+    assert state.track_length == 60
+
+def test_init_race_from_config_correct_cyclist_count():
+    state = init_race_from_config(VALID_CONFIG)
+    assert len(state.cyclists) == 9
+
+def test_init_race_from_config_positions_unique():
+    state = init_race_from_config(VALID_CONFIG)
+    positions = [c.pos for c in state.cyclists]
+    assert len(set(positions)) == 9
