@@ -1,5 +1,9 @@
 import pytest
-from race import Cyclist, RaceState, Action, init_race, race_over, winner, resolve, pos_to_xy, render, build_prompt, parse_action
+import asyncio
+from unittest.mock import AsyncMock, patch, MagicMock
+from race import (Cyclist, RaceState, Action, init_race, race_over, winner,
+                  resolve, pos_to_xy, render, build_prompt, parse_action,
+                  cyclist_agent, orchestrator, _VALID_ACTIONS)
 
 def test_cyclist_defaults():
     c = Cyclist(id="A1", team="A", pos=0, energy=5, potion_used=False)
@@ -200,3 +204,65 @@ def test_parse_action_extracts_word_from_sentence():
     # Claude peut répondre "I choose draft" → on extrait "draft"
     assert parse_action("I choose draft") == "draft"
     assert parse_action("Ma décision: slow") == "slow"
+
+
+def make_mock_response(text: str):
+    """Crée un faux objet réponse Anthropic."""
+    mock = MagicMock()
+    mock.content = [MagicMock(text=text)]
+    return mock
+
+@pytest.mark.asyncio
+async def test_cyclist_agent_returns_valid_action():
+    state = init_race(60, ["A","B","C"], 3)
+    cyclist = state.cyclists[0]
+
+    with patch("race.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        mock_thread.return_value = make_mock_response("advance")
+        cid, action = await cyclist_agent(cyclist, state)
+
+    assert cid == cyclist.id
+    assert action == "advance"
+
+@pytest.mark.asyncio
+async def test_cyclist_agent_handles_bad_response():
+    state = init_race(60, ["A","B","C"], 3)
+    cyclist = state.cyclists[0]
+
+    with patch("race.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        mock_thread.return_value = make_mock_response("je vais très vite!")
+        cid, action = await cyclist_agent(cyclist, state)
+
+    assert action == "advance"  # fallback
+
+@pytest.mark.asyncio
+async def test_orchestrator_returns_action_for_each_cyclist():
+    state = init_race(60, ["A","B","C"], 3)
+
+    with patch("race.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        mock_thread.return_value = make_mock_response("draft")
+        actions = await orchestrator(state)
+
+    assert len(actions) == 9
+    for c in state.cyclists:
+        assert c.id in actions
+        assert actions[c.id] == "draft"
+
+@pytest.mark.asyncio
+async def test_orchestrator_handles_agent_exception():
+    state = init_race(60, ["A","B","C"], 3)
+    call_count = 0
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise Exception("API error")
+        return make_mock_response("slow")
+
+    with patch("race.asyncio.to_thread", side_effect=fake_to_thread):
+        actions = await orchestrator(state)
+
+    # Tous les cyclistes ont une action (fallback pour le premier)
+    assert len(actions) == 9
+    assert all(a in _VALID_ACTIONS for a in actions.values())
