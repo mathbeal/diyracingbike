@@ -1,0 +1,66 @@
+name: Race Simulation
+
+on:
+  pull_request:
+    paths:
+      - 'race_config.json'
+
+jobs:
+  race:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # nécessaire pour git show origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Get baseline config from main branch
+        run: |
+          git show origin/main:race_config.json > race_config_baseline.json || \
+          cp race_config.json race_config_baseline.json
+          # Si race_config.json n'existe pas sur main, utilise la config PR comme baseline
+
+      - name: Run baseline race
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python race.py \
+            --config race_config_baseline.json \
+            --output baseline.json \
+            --no-interactive
+
+      - name: Run PR race
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python race.py \
+            --config race_config.json \
+            --output pr.json \
+            --no-interactive
+
+      - name: Generate comparison comment
+        run: python scripts/compare_results.py baseline.json pr.json > comment.md
+
+      - name: Post PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const comment = fs.readFileSync('comment.md', 'utf8');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
