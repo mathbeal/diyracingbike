@@ -12,17 +12,17 @@
     {
       "name": "B",
       "riders": [
-        {"id": "B1", "energy": 5},
-        {"id": "B2", "energy": 5},
-        {"id": "B3", "energy": 5}
+        {"id": "B1", "energy": 2},
+        {"id": "B2", "energy": 2},
+        {"id": "B3", "energy": 2}
       ]
     },
     {
       "name": "C",
       "riders": [
-        {"id": "C1", "energy": 5},
-        {"id": "C2", "energy": 5},
-        {"id": "C3", "energy": 5}
+        {"id": "C1", "energy": 2},
+        {"id": "C2", "energy": 2},
+        {"id": "C3", "energy": 2}
       ]
     }
   ]
