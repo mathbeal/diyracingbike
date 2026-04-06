@@ -38,6 +38,60 @@ class RaceState:
 
 
 # =============================================================================
+# AGENTS
+# =============================================================================
+
+_VALID_ACTIONS: set[str] = {"advance", "slow", "draft", "potion", "wait"}
+
+
+def build_prompt(cyclist: Cyclist, state: RaceState) -> str:
+    """Construit le prompt envoyé à Claude pour ce cycliste."""
+    others = [c for c in state.cyclists if c.id != cyclist.id]
+
+    # Cyclistes devant (dans un rayon de 5 cases)
+    ahead = [c for c in others if 0 < c.pos - cyclist.pos <= 5]
+    ahead_str = ", ".join(f"{c.id}(équipe {c.team}) à {c.pos - cyclist.pos} case(s)" for c in ahead)
+
+    # Cyclistes derrière (dans un rayon de 5 cases)
+    behind = [c for c in others if 0 < cyclist.pos - c.pos <= 5]
+    behind_str = ", ".join(f"{c.id}(équipe {c.team}) à {cyclist.pos - c.pos} case(s)" for c in behind)
+
+    # Coéquipiers
+    teammates = [c for c in state.cyclists if c.team == cyclist.team and c.id != cyclist.id]
+    team_str = "  ".join(f"{c.id}:#{c.pos}" for c in teammates)
+
+    potion_status = "déjà utilisée" if cyclist.potion_used else "disponible"
+
+    return f"""Tu es le cycliste {cyclist.id} (équipe {cyclist.team}).
+Tick {state.tick} | Position #{cyclist.pos}/{state.track_length} | Énergie: {cyclist.energy}/5
+
+Devant toi (≤5 cases): {ahead_str or "personne"}
+Derrière toi (≤5 cases): {behind_str or "personne"}
+Coéquipiers: {team_str}
+Potion: {potion_status}
+
+Stratégie: économise ton énergie en te mettant en roue (draft) quand possible.
+Si tu es en tête et épuisé, ralentis (slow) pour laisser un coéquipier passer.
+Utilise la potion au bon moment (sprint final ou pour remonter).
+
+Réponds UNIQUEMENT par un seul mot parmi: advance | slow | draft | potion | wait"""
+
+
+def parse_action(text: str) -> Action:
+    """
+    Extrait une action valide du texte retourné par Claude.
+    Fallback sur "advance" si aucun mot valide trouvé.
+    """
+    text = text.strip().lower()
+    # Cherche un mot valide dans le texte (Claude peut répondre "I choose draft")
+    for word in text.split():
+        clean = word.strip(".,!?:;\"'")
+        if clean in _VALID_ACTIONS:
+            return clean  # type: ignore
+    return "advance"  # fallback
+
+
+# =============================================================================
 # MOTEUR
 # =============================================================================
 
