@@ -4,9 +4,9 @@
     {
       "name": "A",
       "riders": [
-        {"id": "A1", "energy": 5},
-        {"id": "A2", "energy": 5},
-        {"id": "A3", "energy": 5}
+        {"id": "A1", "energy": 9},
+        {"id": "A2", "energy": 3},
+        {"id": "A3", "energy": 3}
       ]
     },
     {
@@ -20,9 +20,9 @@
     {
       "name": "C",
       "riders": [
-        {"id": "C1", "energy": 5},
-        {"id": "C2", "energy": 5},
-        {"id": "C3", "energy": 5}
+        {"id": "C1", "energy": 2},
+        {"id": "C2", "energy": 2},
+        {"id": "C3", "energy": 11}
       ]
     }
   ]
