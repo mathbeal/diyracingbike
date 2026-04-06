@@ -38,8 +38,8 @@ def test_generate_comment_returns_markdown():
 
 def test_generate_comment_shows_winner():
     comment = generate_comment(BASELINE, PR_RESULT)
-    assert "Équipe B" in comment or "B" in comment
-    assert "Équipe A" in comment or "A" in comment
+    assert "Équipe B" in comment
+    assert "Équipe A" in comment
 
 
 def test_generate_comment_shows_ticks():
@@ -70,7 +70,7 @@ def test_generate_comment_cli(tmp_path):
     result = subprocess.run(
         ["python3", "scripts/compare_results.py", str(baseline_path), str(pr_path)],
         capture_output=True, text=True,
-        cwd="/home/mathieu/diyracingbike"
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     assert result.returncode == 0
     assert "##" in result.stdout
